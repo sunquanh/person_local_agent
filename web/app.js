@@ -30,6 +30,7 @@ const $ = (s) => document.querySelector(s);
 const state = {
   sessions: [],
   cur: null,          // 当前会话 id
+  sessionGen: 0,      // 会话切换世代戳：旧请求的回包不许覆盖新会话
   busy: false,
   artShown: false,
   pendingConfirm: null,
@@ -142,12 +143,8 @@ function esc(s) {
 function isComposingKey(e) {
   return !!e && (e.isComposing === true || e.keyCode === 229);
 }
-function fmtSize(n) {
-  if (n == null) return '';
-  if (n < 1024) return n + 'B';
-  if (n < 1048576) return (n / 1024).toFixed(1) + 'KB';
-  return (n / 1048576).toFixed(1) + 'MB';
-}
+/* fmtSize 唯一定义在附件工具区（toAttObj 上方）；此处原重复定义已删——
+   函数声明会提升，后者全局生效，留两份只会误导。 */
 function toast(msg, isErr) {
   const t = $('#toast');
   t.textContent = msg;
@@ -350,6 +347,7 @@ $('#btnNew').onclick = async () => {
 };
 async function selectSession(id, isNew) {
   state.cur = id;
+  const gen = ++state.sessionGen;  // 快速连点两个会话时，旧请求的回包不许覆盖新会话
   try { localStorage.setItem('lastSession', id); } catch (e) {}
   if (state.selectMode) exitSelectMode();
   showWelcome(false);
@@ -360,8 +358,19 @@ async function selectSession(id, isNew) {
   state.attachments = [];
   renderAttachStrip();
   renderSessions();
-  const r = await fetch('/api/session?id=' + encodeURIComponent(id));
-  const d = await r.json();
+  let d;
+  try {
+    const r = await fetch('/api/session?id=' + encodeURIComponent(id));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    d = await r.json();
+  } catch (e) {
+    if (gen !== state.sessionGen) return;  // 已被更新的请求取代，静默丢弃
+    // 加载失败也要清掉骨架屏，否则“点了没反应”的占位图一直挂着
+    $('#messages').innerHTML = '<div class="muted" style="padding:16px">会话加载失败：' + esc(e.message) + '，点左侧会话重试。</div>';
+    toast('会话加载失败：' + e.message, true);
+    return;
+  }
+  if (gen !== state.sessionGen) return;  // 旧回包不渲染
   const s = d.session || {};
   $('#chatTitle').textContent = s.title || '新会话';
   $('#chatMeta').textContent =
@@ -918,8 +927,11 @@ function exitSelectMode() {
 }
 async function loadSessionMessages() {
   if (!state.cur) return;
-  const r = await fetch('/api/session?id=' + encodeURIComponent(state.cur));
+  const sid = state.cur;
+  const gen = state.sessionGen;
+  const r = await fetch('/api/session?id=' + encodeURIComponent(sid));
   const d = await r.json();
+  if (state.cur !== sid || gen !== state.sessionGen) return;  // 期间已切会话，旧回包丢弃
   const s = d.session || {};
   state.compacted = s.compact || null;
   state.msgCount = (s.messages || []).length;
@@ -1308,7 +1320,9 @@ function syncRightPanel() {
     // 没内容的面板：置灰且不可点（避免点了被自动弹回）
     const empty = !has[b.dataset.tab];
     b.classList.toggle('off', empty);
-    b.disabled = empty;
+    // 不用 disabled：焦点正停在该按钮上时，每帧 sync 会把它踢出焦点，
+    // Tab 键导航会被打断；aria-disabled + 点击守卫同样不可点、焦点不丢。
+    b.setAttribute('aria-disabled', empty ? 'true' : 'false');
   });
   const tn = $('#rpTodoN'), kn = $('#rpToolN'), an = $('#rpArtN');
   if (tn) tn.textContent = ($('#todoProgress').textContent || '').trim();
@@ -1317,7 +1331,8 @@ function syncRightPanel() {
 }
 $('#rpTabs').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-tab]');
-  if (b) { rpTab = b.dataset.tab; syncRightPanel(); }
+  if (!b || b.getAttribute('aria-disabled') === 'true') return;
+  rpTab = b.dataset.tab; syncRightPanel();
 });
 
 /* ── 骨架屏 + 断连横幅（减少“点了没反应”感）─────────────── */
@@ -1765,6 +1780,8 @@ async function send(overrideText, overrideAtts, opts) {
     toast('创建会话失败：' + e.message, true);
     return;
   }
+  // 本轮归属的会话：中途切走后，帧与收尾不再写当前视图（见 handleFrame 与 finally）
+  const runSid = state.cur;
   showWelcome(false);
 
   // 编辑重发：先把该条及之后的对话从服务端截掉，再以新内容重发
@@ -1853,6 +1870,7 @@ async function send(overrideText, overrideAtts, opts) {
   // result 兜底只在该轮完全没流式正文时触发，避免与渲染节流竞态导致内容双份
   const streamCtx = {
     gotDelta: false,
+    isStale: () => state.cur !== runSid,
     clearWait,
     onDelta: (t) => { streamCtx.gotDelta = true; jsSplit.push(t); },
     flush: () => { jsSplit.finish(); if (mdRaf) { clearTimeout(mdRaf); mdRaf = null; } renderMd(true); },
@@ -1926,8 +1944,17 @@ async function send(overrideText, overrideAtts, opts) {
       }
     } else {
       toast('请求失败：' + e.message, true);
-      contentDiv.innerHTML = '';
-      contentDiv.textContent = '❌ ' + e.message;
+      if (mdBuf) {
+        // 流中断但已有正文：保留已流出的内容，只追加错误说明
+        renderMd(true);
+        const en = document.createElement('div');
+        en.className = 'err-box';
+        en.innerHTML = `<div class="err-line">❌ ${esc(e.message)}</div>`;
+        contentDiv.appendChild(en);
+      } else {
+        contentDiv.innerHTML = '';
+        contentDiv.textContent = '❌ ' + e.message;
+      }
     }
   } finally {
     clearWait();
@@ -1943,20 +1970,23 @@ async function send(overrideText, overrideAtts, opts) {
       refreshSessionMeta();
       // 补绑：刚发送的用户消息在流式渲染时没有真实 ts（删除按钮需要 ts）。
       // 服务端持久化后回读，用带 ts/元数据的版本替换，让附件可单独删除。
-      try {
-        const s = await fetch('/api/session?id=' + encodeURIComponent(state.cur));
-        const sd = await s.json();
-        const msgs = (sd.session || {}).messages || [];
-        const last = [...msgs].reverse().find((m) => m.role === 'user');
-        if (last) {
-          const users = box.querySelectorAll('.msg.user');
-          const el = users[users.length - 1];
-          if (el) {
-            el.replaceWith(msgUser(last.content, last.ts, last.attachments));
+      // 仅当用户还停在发送的会话里；中途切走后不碰当前视图。
+      if (state.cur === runSid) {
+        try {
+          const s = await fetch('/api/session?id=' + encodeURIComponent(state.cur));
+          const sd = await s.json();
+          const msgs = (sd.session || {}).messages || [];
+          const last = [...msgs].reverse().find((m) => m.role === 'user');
+          if (last) {
+            const users = box.querySelectorAll('.msg.user');
+            const el = users[users.length - 1];
+            if (el) {
+              el.replaceWith(msgUser(last.content, last.ts, last.attachments));
+            }
           }
-        }
-        renderSessionTools(msgs);
-      } catch (e) { /* 保留即时渲染即可 */ }
+          renderSessionTools(msgs);
+        } catch (e) { /* 保留即时渲染即可 */ }
+      }
     }
   }
 }
@@ -2001,6 +2031,9 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       break;
     }
     case 'ask': {
+      // 切走后提问卡会画进已摘除的气泡、用户看不见：跳过渲染，
+      // 服务端 ask 超时后按未回答继续（confirm 走全局弹窗，不受影响）。
+      if (ctx && ctx.isStale && ctx.isStale()) break;
       $('#queueBar').classList.add('hidden');
       showAskCard(botEl, f);
       break;
@@ -2130,8 +2163,11 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       });
       refreshTimeline(botEl);
       // 一行结论 + 可展开详情 + 一键重试（U10/错误呈现）
+      // 已流出的正文要保留：错误块追加到内容区末尾，不清空 mdBox；
+      // 旧版 innerHTML 整块替换会把已流出的答案一起抹掉。
       const cdiv = botEl.querySelector('.content');
-      cdiv.innerHTML = `<div class="err-box">
+      const eb = document.createElement('div');
+      eb.innerHTML = `<div class="err-box">
         <div class="err-line">❌ ${esc(f.message || '任务失败')}</div>
         <details class="err-more"><summary>查看详情（日志 / 堆栈）</summary>
           <pre>${esc(f.detail || f.message || '')}</pre>
@@ -2139,6 +2175,7 @@ function handleFrame(f, botEl, thinkEl, ctx) {
         </details>
         <button class="btn small err-retry" title="移除这条失败回复并重新发送上一条">${ico('retry')} 重试这一轮</button>
       </div>`;
+      cdiv.appendChild(eb.firstElementChild);
       $('#queueBar').classList.add('hidden');
       toast(f.message, true);
       break;
@@ -2510,11 +2547,13 @@ function showConfirm(cmd) {
     </div>`;
   openModal();
   body.querySelector('#cfYes').onclick = async () => {
+    state.pendingConfirm = null;  // 先清：closeModal 才不会再发一遍拒绝
     closeModal();
     await fetch('/api/confirm', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approved: true }) });
   };
   body.querySelector('#cfNo').onclick = async () => {
+    state.pendingConfirm = null;  // 先清：closeModal 才不会再发一遍拒绝
     closeModal();
     await fetch('/api/confirm', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approved: false }) });
@@ -2793,8 +2832,10 @@ $('#btnCancelQueue').onclick = () => {
 };
 async function refreshSessionMeta() {
   if (!state.cur) return;
-  const r = await fetch('/api/session?id=' + encodeURIComponent(state.cur));
+  const sid = state.cur;
+  const r = await fetch('/api/session?id=' + encodeURIComponent(sid));
   const d = await r.json();
+  if (state.cur !== sid) return;  // 期间已切会话，不写旧会话的标题
   if (d.session) {
     $('#chatTitle').textContent = d.session.title || '新会话';
     $('#chatMeta').textContent =
@@ -2838,6 +2879,16 @@ function closeModal() {
   $('#modal').classList.remove('wide');
   $('#modalMask').classList.add('hidden');
   closeBatchPoll();   // 批量作业面板关掉后停止轮询
+  // 未答复的确认（Esc/点遮罩/点 X 关弹窗）：按拒绝处理并通知后端，
+  // 否则 agent 在服务端空等满 180 秒。Yes/No 按钮已先清 pendingConfirm，
+  // 不会重复发。
+  if (state.pendingConfirm) {
+    state.pendingConfirm = null;
+    fetch('/api/confirm', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: false }) }).catch(() => {});
+    toast('已拒绝未确认的执行请求', true);
+  }
   if (modalReturnFocus && modalReturnFocus.focus) {
     try { modalReturnFocus.focus(); } catch (e) {}
   }

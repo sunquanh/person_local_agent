@@ -1001,10 +1001,12 @@ body.resizing *{transition:none!important}
 .df-tag i.del{color:var(--err)}
 .diff-body{max-height:320px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Consolas,
   "Courier New",monospace;font-size:11.5px;line-height:1.55;background:var(--code-bg)}
-.dl{padding:0 10px;white-space:pre;color:var(--muted)}
+.dl{padding:0 10px;white-space:pre;color:var(--muted);font-family:ui-monospace,Consolas,monospace;font-size:12px}
 .dl.add{background:color-mix(in srgb,var(--ok) 13%,transparent);color:var(--text)}
 .dl.del{background:color-mix(in srgb,var(--err) 13%,transparent);color:var(--text)}
 .dl.hunk{background:var(--accent-tint);color:var(--accent-h)}
+/* 本轮改动弹窗里的 diff 体：长行横向滚动（旧版无此规则，长行会溢出弹窗）；纵向走 #modalBody 的滚动 */
+#modalBody .diff-body{overflow-x:auto}
 
 /* ── 桌面优先：收起右侧检查器 / 左侧会话栏后，缩窄窗口仍可保持可操作 ── */
 body{min-width:720px}
