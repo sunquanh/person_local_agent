@@ -202,16 +202,6 @@ D:\我的工作台\              ← 你自己日常用的文件夹
 - 压缩后按钮变「已压缩」，再点一次即撤销（恢复完整历史）
 - 配了上下文窗口时仍会自动压缩；手动压缩是提前释放，避免 8k 模型撞窗
 
-## 验证
-
-```bash
-python verify/test_all.py         # 单元/集成自检（白名单/记忆/会话/Agent循环/LLM降级/项目指令）
-python verify/test_server.py      # HTTP 层冒烟（端口独占/SSE/令牌/设置/确认超时/撤销/diff）
-python verify/test_ui_contract.py # SSE 事件契约：后端发的事件前端必须都有处理分支
-python verify/mock_llm.py --port 9977   # mock 模型，配合 GUI 做端到端
-python verify/check_thinking.py          # 在离线机验证 hide 模式是否真的关闭思考（对比 token 用量）
-```
-
 ## 离线部署
 
 - 纯 Python 标准库（Python 3.8+），无第三方依赖；办公文档（word/excel/ppt/pdf/图片）工具可选，

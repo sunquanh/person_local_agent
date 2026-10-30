@@ -22,14 +22,23 @@ except Exception:
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+# 与 config.example.json 对齐：缺的键在这里补齐（值与代码既有默认值一致，
+# 改动前后行为不变）。注意不补 model.max_tokens：example 写 0 表示不限，
+# 但 validate_config 要求 max_tokens > 0，补 0 会导致每次启动都校验失败；
+# example 与校验器的这个口子需另行定夺（改 example 或改校验），不在本批动。
 DEFAULT_CONFIG = {
     "model": {"base_url": "http://127.0.0.1:8000/v1", "api_key": "", "name": "qwen",
+              "thinking": "collapse",
               "context_window": 32768},
     "workspace": {"root": os.path.join(os.path.expanduser('~'), '我的工作台')},
-    "server": {"host": "127.0.0.1", "port": 8080},
+    "server": {"host": "127.0.0.1", "port": 8080,
+               "auto_exit": True, "auto_exit_grace_s": 5},
     "limits": {"max_upload_mb": 50, "chat_timeout_s": 600,
+               "llm_timeout_s": 300,
                "compress_threshold_chars": 20000},
     "rag": {"enabled": True, "top_k": 4},
+    "memory": {"extract": True},
+    "prompt": {"role": "", "rules": []},
 }
 
 

@@ -553,6 +553,15 @@ class Agent:
                 return bool(reg.confirm_callback(f'MCP 工具 {name}({brief})'))
             if name in CODE_TOOLS:
                 cmd = str((args or {}).get('command') or (args or {}).get('code') or '')
+                if name == 'execute_python':
+                    # 代码执行不走 shell 命令的白名单/记忆通道：_is_dangerous
+                    # 是 shell 正则，对代码文本没有拦截意义；除 trusted 档
+                    # （用户已选“全部自动”）外一律人工确认。
+                    if reg.profile == 'trusted':
+                        return True
+                    if reg.confirm_callback is None:
+                        return False
+                    return bool(reg.confirm_callback(f"执行代码：{cmd[:400]}"))
                 if reg.cmd_auto_approved(cmd):
                     return True
                 if reg.confirm_callback is None:

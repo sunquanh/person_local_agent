@@ -9,6 +9,7 @@ execute 返回 ToolResult(text, artifacts[, image])。artifacts 为工作台相�
 所有工具纯标准库实现，不引入任何需要联网安装的依赖。
 """
 import base64
+import itertools
 import json
 import os
 import re
@@ -22,6 +23,9 @@ from . import logsetup
 log = logsetup.get('tools')
 
 # ── 危险命令检测（命中即要求用户确认）──────────────────────────────
+# 启发式正则：只拦常见 shell 写法，对拼接、编码、变量展开后的实际命令
+# 没有拦截保证；对 execute_python 的代码文本更不构成安全保证——代码执行
+# 不走这条白名单，见 core._approve_tool 的单独分支。
 _DANGEROUS = [
     r'\brm\s+-rf\b', r'\brm\s+-r\b', r'\brmdir\s+/s', r'\brd\s+/s',
     r'\bdel\s+/[fq]', r'\bformat\b', r'\bdiskpart\b', r'\bshutdown\b',
@@ -98,6 +102,17 @@ def _decode(data: bytes) -> str:
     return data.decode('utf-8', errors='replace')
 
 
+def _read_text_best_effort(p: Path):
+    """按 utf-8 -> gb18030 -> latin-1 试读，返回 (文本, 编码)；与 read_file 同口径。"""
+    raw = p.read_bytes()
+    for enc in ('utf-8', 'gb18030', 'latin-1'):
+        try:
+            return raw.decode(enc), enc
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode('utf-8', errors='replace'), 'utf-8'
+
+
 class ToolResult:
     def __init__(self, text: str, artifacts=None, image=None):
         self.text = text
@@ -166,7 +181,7 @@ class ToolRegistry:
         # 审批档位（B4）
         self.profile = profile if profile in PROFILES else 'suggest'
         self.auto_approve = dict(auto_approve or {})
-        # 本次运行用户批准过的命令前缀（内存态，不落盘，重启清空）
+        # 本次运行用户批准过的完整命令（内存态，不落盘，重启清空）
         self.session_allow = session_allow if session_allow is not None else []
         self.pre_approved = set()     # 本轮已确认过的完整命令（避免二次弹窗）
         self.allow_delegate = allow_delegate      # 子 Agent 不再注册 delegate_task（防递归）
@@ -204,24 +219,26 @@ class ToolRegistry:
             return True
         # shell 连接/重定向/替换元字符一律走人工确认：白名单判定只看“第一段
         # 前缀”，而实际执行的是整条命令，`echo x > 盘外路径`、`dir && del 文件`、
-        # `cd . & del *` 都会借白名单前缀放行后半段。已记住的前缀也不例外
-        # （记忆只记首词，同样看不到后半段）。
+        # `cd . & del *` 都会借白名单前缀放行后半段。记忆存的是完整命令，
+        # 但仍先过这一关：已记住的命令下次带上元字符也重新确认。
         if re.search(r'[&|;<>`$()\n\r]', c):
             return False
-        first = c.split()[0].lower()
-        if first in self.session_allow:          # 本次运行已记住的前缀
+        norm = re.sub(r'\s+', ' ', c)
+        if norm in self.session_allow:           # 本次运行已记住的完整命令
             return True
         head = re.split(r'&&|\|\||;', c, maxsplit=1)[0].strip().lower()
         return any(head == p or head.startswith(p + ' ') for p in _READONLY_CMDS)
 
     def remember_cmd(self, cmd: str):
-        """用户本次批准后记住命令前缀（危险命令不记，下次仍问）。"""
-        c = (cmd or '').strip()
+        """用户本次批准后记住完整命令（危险命令不记，下次仍问）。
+
+        只记完整命令（空白折叠后比对）：记首词会让批过 `python check.py`
+        后同首词的任意命令都自动放行。"""
+        c = re.sub(r'\s+', ' ', (cmd or '').strip())
         if not c or _is_dangerous(c):
             return
-        first = c.split()[0].lower()
-        if first and first not in self.session_allow:
-            self.session_allow.append(first)
+        if c not in self.session_allow:
+            self.session_allow.append(c)
 
     def _add(self, name, desc, params, fn):
         self.tools[name] = Tool(name, desc, params, fn)
@@ -252,16 +269,7 @@ class ToolRegistry:
             max_mb = int(a.get('max_mb', 10))
             if p.stat().st_size > max_mb * 1024 * 1024:
                 return ToolResult(f"文件过大(>{max_mb}MB): {p.name}，请用别的工具或分段读取")
-            raw = p.read_bytes()
-            text = None
-            for enc in ('utf-8', 'gb18030', 'latin-1'):
-                try:
-                    text = raw.decode(enc)
-                    break
-                except (UnicodeDecodeError, LookupError):
-                    continue
-            if text is None:
-                text = raw.decode('utf-8', errors='replace')
+            text, _enc = _read_text_best_effort(p)
             try:
                 offset = max(0, int(a.get('offset', 0) or 0))
             except (TypeError, ValueError):
@@ -288,7 +296,7 @@ class ToolRegistry:
 
         def edit_file(a):
             real, rel = ws.resolve_write(a['path'])
-            text = real.read_text(encoding='utf-8')
+            text, enc = _read_text_best_effort(real)
             old, new = a.get('old', ''), a.get('new', '')
             if not old:
                 raise ValueError("edit_file 必须提供 old 片段")
@@ -302,7 +310,7 @@ class ToolRegistry:
             if n > 1 and not a.get('all'):
                 raise ValueError(f"待替换文本出现 {n} 次，请提供更精确的 old 片段，或传 all=true")
             text = text.replace(old, new) if a.get('all') else text.replace(old, new, 1)
-            real.write_text(text, encoding='utf-8')
+            real.write_text(text, encoding=enc)
             return ToolResult(f"✅ 已编辑 {rel}（替换 {n} 处）", artifacts=[rel])
 
         def list_dir(a):
@@ -381,6 +389,7 @@ class ToolRegistry:
 
         def delete_file(a):
             real, rel = _managed_existing(a['path'])
+            ws._snap_record(real, rel)   # 删前快照：undo_turn 可还原文件、重建空目录
             if real.is_dir():
                 if any(real.iterdir()):
                     raise ValueError(f"目录非空，请先删除其中文件: {rel}")
@@ -394,6 +403,11 @@ class ToolRegistry:
             dst, dst_rel = ws.resolve_managed(a['to'])
             if dst.exists():
                 raise ValueError(f"目标已存在，请换一个名字: {dst_rel}")
+            if src.is_file():
+                # 文件移动：源快照（undo 还原）+ 目标“新增”记录（undo 删掉它）；
+                # 目录移动不进快照（整目录回滚超出本快照机制范围）。
+                ws._snap_record(src, src_rel)
+                ws._snap_record(dst, dst_rel)
             dst.parent.mkdir(parents=True, exist_ok=True)
             if src.is_dir():
                 import shutil
@@ -451,6 +465,11 @@ class ToolRegistry:
             # 长输出截断（避免一次命令把上下文打爆）
             if len(body) > 8000:
                 body = body[:8000] + f"\n…(输出共 {len(body)} 字符，已截断)"
+            if proc.returncode != 0:
+                # 非零退出必须带 ❌ 前缀：core._exec_one 只看此前缀定 ok，
+                # 否则连续失败计数被清零、熔断永不触发。
+                return ToolResult(f"❌ $ {cmd}\n(exit {proc.returncode})\n"
+                                  f"…(耗时 {time.monotonic() - t0:.1f}s)\n{body}")
             return ToolResult(f"$ {cmd}\n(exit {proc.returncode})\n"
                               f"…(耗时 {time.monotonic() - t0:.1f}s)\n{body}")
 
@@ -460,6 +479,8 @@ class ToolRegistry:
             - 强制 timeout（默认 60s，死循环会被杀掉而不是卡死服务器）
             - cwd 限工作台根目录：相对路径写入留在工作台内
             - 输出捕获后返回；异常/退出码非零会明确提示
+            - 审批：不走 shell 命令白名单（见 core._approve_tool），除 trusted
+              档外每次人工确认；_is_dangerous 正则不对代码文本做安全承诺
             """
             code = a['code']
             try:
@@ -504,7 +525,7 @@ class ToolRegistry:
             out = (out or '') + ((f"\n[stderr]\n{err}") if err else '')
             out = out.strip()
             if proc.returncode != 0 and not out:
-                out = f"(进程异常退出，exit {proc.returncode})"
+                out = f"❌ (进程异常退出，exit {proc.returncode})"
             return ToolResult(out or "(无输出)")
 
         # ── 记忆 ────────────────────────────────────────────────
@@ -617,7 +638,7 @@ class ToolRegistry:
                 return ToolResult("❌ 缺少 openpyxl 库，无法读 Excel")
             import openpyxl
             p = ws.resolve_read(a['path'])
-            wb = openpyxl.load_workbook(str(p), data_only=True)
+            wb = openpyxl.load_workbook(str(p), data_only=True, read_only=True)
             names = wb.sheetnames
             want = a.get('sheet')
             if want:
@@ -634,17 +655,32 @@ class ToolRegistry:
                 max_rows = 200
             out = []
             total_rows = 0
-            for sheet in names:
-                sx = wb[sheet]
-                total_rows += sx.max_row
-                out.append(f"── 工作表: {sheet} ({sx.max_row} 行 x {sx.max_column} 列) ──")
-                rows = list(sx.iter_rows(values_only=True))
-                for row in rows[offset:offset + max_rows]:
-                    vals = ["" if v is None else str(v) for v in row]
-                    if any(vals):
-                        out.append(" | ".join(vals))
-                if len(rows) > offset + max_rows:
-                    out.append(f"…(还有 {len(rows) - offset - max_rows} 行，用 offset={offset + max_rows} 继续读)")
+            try:
+                for sheet in names:
+                    sx = wb[sheet]
+                    n_rows = sx.max_row or 0
+                    total_rows += n_rows
+                    out.append(f"── 工作表: {sheet} ({n_rows} 行 x {sx.max_column} 列) ──")
+                    # 流式窗口：多读一行只为探知“还有没有”，整表不再物化。
+                    shown = 0
+                    has_more = False
+                    for row in itertools.islice(sx.iter_rows(values_only=True),
+                                                offset, offset + max_rows + 1):
+                        if shown >= max_rows:
+                            has_more = True
+                            break
+                        vals = ["" if v is None else str(v) for v in row]
+                        if any(vals):
+                            out.append(" | ".join(vals))
+                        shown += 1
+                    if has_more:
+                        rest = n_rows - offset - max_rows if n_rows > offset + max_rows else None
+                        if rest is not None:
+                            out.append(f"…(还有 {rest} 行，用 offset={offset + max_rows} 继续读)")
+                        else:
+                            out.append(f"…(还有更多行，用 offset={offset + max_rows} 继续读)")
+            finally:
+                wb.close()
             return ToolResult("\n".join(out))
 
         def write_excel(a):

@@ -30,7 +30,11 @@ MAX_RESULT = 12000          # 单次工具结果截断上限（字符）
 
 
 class McpError(Exception):
-    pass
+    """MCP 调用失败；business=True 表示服务端返回的业务错误（不可重试）。"""
+
+    def __init__(self, message, business=False):
+        super().__init__(message)
+        self.business = business
 
 
 def render_content(content) -> str:
@@ -290,12 +294,13 @@ class McpServer:
             if 'error' in obj:
                 err = obj['error'] or {}
                 raise McpError(f"MCP {self.name} 返回错误 "
-                               f"{err.get('code')}: {err.get('message')}")
+                               f"{err.get('code')}: {err.get('message')}",
+                               business=True)
             return obj.get('result') or {}
 
     # ── 对外调用 ─────────────────────────────────────────────
     def call(self, tool: str, arguments: dict) -> str:
-        """调用工具并把结果渲染成文本；进程挂了自动重启一次再试。"""
+        """调用工具并把结果渲染成文本；进程挂了自动重启一次再试，业务错误不重试。"""
         with self._lock:
             if self.status != 'connected' or self.proc is None:
                 if not self.start():
@@ -305,8 +310,9 @@ class McpServer:
                                   {'name': tool, 'arguments': arguments or {}},
                                   self.timeout)
             except McpError as e:
-                if '超时' in str(e):
-                    raise                      # 超时不重启（可能真在长跑）
+                if '超时' in str(e) or getattr(e, 'business', False):
+                    raise                      # 超时不重启（可能真在长跑）；
+                                               # 业务错误不重试（非幂等工具可能执行两次）
                 if not self.start():
                     raise McpError(f'{e}；重启失败: {self.error}')
                 r = self._request('tools/call',

@@ -250,6 +250,8 @@ class Workspace:
                 bak = f"{len(snap['entries'])}.bak"
                 shutil.copy2(real, snap['dir'] / bak)
                 snap['entries'].append({"rel": rel, "existed": True, "backup": bak})
+            elif real.is_dir():
+                snap['entries'].append({"rel": rel, "existed": True, "is_dir": True})
             else:
                 snap['entries'].append({"rel": rel, "existed": False})
         except OSError:
@@ -337,6 +339,10 @@ class Workspace:
                 continue
             try:
                 if e.get('existed'):
+                    if e.get('is_dir'):
+                        real.mkdir(parents=True, exist_ok=True)
+                        restored += 1
+                        continue
                     bak_name = str(e.get('backup') or '')
                     if not re.fullmatch(r'[0-9]+\.bak', bak_name):
                         failed.append(rel)

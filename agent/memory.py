@@ -21,12 +21,23 @@ _LOCK = threading.Lock()
 
 
 def _split_words(text: str):
-    """简易分词：英文单词 + 中文单字，去掉停用词。"""
+    """简易分词：英文单词 + 中文双字词（独字成词时保留单字），去掉停用词。
+
+    中文单字到处命中是召回噪声的主要来源；双字词仍用子串匹配，
+    故“周报”不再拆成“周”“报”两处命中。"""
     words = []
-    for m in re.finditer(r'[a-zA-Z0-9_]{2,}|[\u4e00-\u9fff]', text or ''):
+    for m in re.finditer(r'[a-zA-Z0-9_]{2,}', text or ''):
         w = m.group(0).lower()
         if w not in _STOPWORDS:
             words.append(w)
+    for m in re.finditer(r'[\u4e00-\u9fff]+', text or ''):
+        run = m.group(0)
+        if len(run) == 1:
+            if run not in _STOPWORDS:
+                words.append(run)
+        else:
+            for i in range(len(run) - 1):
+                words.append(run[i:i + 2])
     return words
 
 
@@ -223,7 +234,10 @@ class Memory:
             s = sum(1 for w in words if w in r['content'].lower())
             if s > 0:
                 scored.append((s, r))
-        scored.sort(key=lambda x: (-x[0], -x[1]['important'], x[1]['updated_at']))
+        # 两段稳定排序：先按 updated_at 降序，再按（分数、重要度）降序，
+        # 同分同重要度时最新优先（单键无法对字符串时间取负）。
+        scored.sort(key=lambda x: x[1]['updated_at'], reverse=True)
+        scored.sort(key=lambda x: (-x[0], -x[1]['important']))
         out = []
         ids = []
         for s, r in scored[:limit]:
