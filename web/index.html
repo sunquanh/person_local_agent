@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本地 Agent 工作台</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/vendor/github.min.css" id="hlLight">
+<link rel="stylesheet" href="/vendor/github-dark.min.css" id="hlDark" disabled>
+<script src="/vendor/markdown-it.min.js"></script>
+<script src="/vendor/highlight.min.js"></script>
+</head>
+<body>
+<div id="app">
+  <div id="netBanner" class="hidden">⚠️ 与本地服务断开，正在重连…</div>
+  <aside id="sidebar">
+    <div class="sb-head">
+      <div class="logo"><span class="logo-mark">AI</span><span class="logo-txt">本地 Agent 工作台</span></div>
+      <button id="btnNew" class="btn primary block">＋ 新会话</button>
+      <div class="sb-search">
+        <span class="sb-search-ic">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        </span>
+        <input id="sbSearch" type="text" aria-label="搜索会话" placeholder="搜索会话…（回车在全部内容中检索）" autocomplete="off" spellcheck="false">
+        <button id="sbSearchClear" class="sb-search-x hidden" title="清除" aria-label="清除搜索">✕</button>
+      </div>
+    </div>
+    <div class="sb-label" id="sbLabel">最近会话</div>
+    <div id="sessionList" class="sb-list"></div>
+    <div class="sb-foot">
+      <div class="sb-status" id="sbStatus"></div>
+      <div class="sb-btns">
+        <button id="btnWs" class="btn ghost" title="文件浏览">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>文件
+        </button>
+        <button id="btnMemory" class="btn ghost" title="记忆库">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>记忆
+        </button>
+        <button id="btnSettings" class="btn ghost" title="设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><circle cx="4" cy="12" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="20" cy="14" r="2"/></svg>设置
+        </button>
+      </div>
+    </div>
+  </aside>
+  <div class="resizer left" id="rzLeft" title="拖动调整宽度，双击复位"></div>
+
+  <main id="main">
+    <header id="chatHead">
+      <div class="ch-titles">
+        <div id="chatTitle" title="点击重命名会话">新会话</div>
+        <div id="chatMeta"></div>
+      </div>
+      <div class="ch-actions" id="chActions">
+      <select id="modelSel" class="btn ghost small" title="临时切换模型（仅本会话生效，用于对比/降级）">
+        <option value="">模型：默认</option>
+      </select>
+      <div class="ctx-wrap" id="ctxWrap">
+        <button id="ctxMeter" class="hidden" aria-haspopup="true" aria-expanded="false"
+          title="本轮发送给模型的上下文占用（点击可压缩历史）">
+          <span class="ctx-bar"><i></i></span>
+          <span id="ctxText">0 / 0</span>
+          <svg class="ic ctx-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div id="ctxMenu" class="more-menu hidden" role="menu" aria-label="上下文操作">
+          <button id="btnCompact" class="btn hidden" title="立即压缩本会话历史：更早的对话换成摘要，释放上下文（完整对话仍可回看/导出）">压缩历史</button>
+          <button id="btnCtxSet" class="btn" title="在设置里调整上下文窗口与压缩阈值">调整上下文设置</button>
+        </div>
+      </div>
+      <button id="btnTheme" class="btn ghost small" title="切换深/浅色主题（设置里也能改）" aria-label="切换深浅主题"></button>
+      <button id="btnBatch" class="btn ghost small" title="批量作业：一个目录一次跑完，带台账 / 暂停 / 重试 / 导出 CSV"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg> 批量作业</button>
+      <button id="btnExport" class="btn ghost small" title="导出本会话为 Markdown">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>导出
+      </button>
+      </div>
+      <div class="ch-more">
+        <button id="btnMore" class="btn ghost small" title="更多操作" aria-haspopup="true" aria-expanded="false" aria-label="更多操作">⋯</button>
+        <div id="moreMenu" class="more-menu hidden" role="menu" aria-label="更多操作"></div>
+      </div>
+    </header>
+    <div id="selBar" class="hidden">
+      <span id="selCount">已选 0 条</span>
+      <button id="selAll" class="btn small">全选</button>
+      <button id="selExport" class="btn small primary" disabled>导出所选 (0)</button>
+      <button id="selCancel" class="btn small ghost">取消</button>
+    </div>
+    <div id="messages" role="log" aria-label="对话内容"></div>
+    <button id="jumpBottom" class="hidden" title="回到底部" aria-label="回到底部">↓</button>
+    <div id="welcome" class="hidden">
+      <div class="w-logo"><span>AI</span></div>
+      <h2>有什么可以帮你？</h2>
+      <p>本地运行 · 数据不出本机 · 支持文件分析与产出</p>
+      <div id="wStats" class="w-stats"></div>
+      <div class="w-chips" id="wChips">
+        <button class="w-chip" data-q="写一份本周工作总结"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg> 写一份本周工作总结</button>
+        <button class="w-chip" data-q="分析 inputs 目录下的数据并汇报"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16v3M12 10v9M17 6v13"/></svg> 分析 inputs 里的数据</button>
+        <button class="w-chip" data-q="起草一份项目汇报的 PPT 大纲"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg> 起草 PPT 大纲</button>
+      </div>
+    </div>
+
+    <div id="queueBar" class="hidden"><span id="queueText"></span><button id="btnCancelQueue" class="btn ghost small">✕ 取消排队</button></div>
+    <div id="runBanner" class="hidden">⏳ 上一轮仍在后台运行，完成后自动刷新本会话</div>
+
+    <footer id="inputBar">
+      <div id="slashMenu" class="hidden"></div>
+      <div id="attachStrip" class="attach-strip hidden"></div>
+      <div class="input-row">
+        <button id="btnUpload" class="btn ghost" title="上传文件到 inputs/" aria-label="上传文件到 inputs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <textarea id="input" rows="1" aria-label="输入任务" placeholder="输入任务…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button id="btnStop" class="btn danger small hidden" title="终止当前任务（含排队中的任务）"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg> 停止</button>
+        <button id="btnSend" class="btn primary" title="发送">
+          <svg id="icSend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
+        </button>
+      </div>
+      <div class="input-hint">
+        <label class="mode"><input type="checkbox" id="askMode"> 只读模式</label>
+        <span id="uploadHint" class="muted"></span>
+      </div>
+      <input type="file" id="fileInput" multiple hidden>
+    </footer>
+  </main>
+
+  <div class="resizer" id="rzRight" title="拖动调整宽度，双击复位"></div>
+  <aside id="rightPanel">
+    <div id="rpEmpty" class="rp-empty hidden">
+      <div class="rp-empty-ic">◫</div>
+      <p>这里显示本轮的 <b>任务清单</b>、<b>工具调用</b> 与 <b>产出物</b>。</p>
+      <p class="muted">跑一个任务后自动出现；Ctrl+J 可收起右栏。</p>
+    </div>
+    <div id="rpTabs" class="hidden">
+      <button data-tab="todo"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg> 任务<span class="rp-n" id="rpTodoN"></span></button>
+      <button data-tab="tool"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> 工具<span class="rp-n" id="rpToolN"></span></button>
+      <button data-tab="art"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg> 产物<span class="rp-n" id="rpArtN"></span></button>
+    </div>
+    <section id="todoPanel" class="hidden">
+      <div class="rp-title"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg> 任务清单 <span id="todoProgress" class="muted"></span></div>
+      <div id="todoList" class="todo-list"></div>
+    </section>
+
+    <section id="toolPanel" class="hidden">
+      <details id="sessionTools" class="tools-block session-tools" open>
+        <summary><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> 工具调用（0）</summary>
+        <div class="msg-tools"></div>
+      </details>
+    </section>
+
+    <section id="artifactPanel" class="hidden">
+      <div class="ap-head"><span class="ap-title"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg> 本会话产出物</span>
+        <span class="ap-ops">
+          <button id="btnZipArts" class="btn ghost small" title="打包本会话全部产出物为 zip 下载"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg> 打包下载</button>
+          <button id="btnHideArts" class="btn ghost small" title="隐藏产出物面板">收起</button>
+        </span></div>
+      <div id="artifactList" class="ap-list"></div>
+    </section>
+  </aside>
+</div>
+
+<div id="modalMask" class="hidden"></div>
+<div id="modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal-head"><span id="modalTitle"></span><button id="modalClose" class="btn ghost small" aria-label="关闭">✕</button></div>
+  <div id="modalBody"></div>
+</div>
+
+<div id="toast" class="hidden" role="status" aria-live="polite"></div>
+<!-- 读屏提示：只播报「回复完成/失败」这类结论，不播报逐字流式内容 -->
+<div id="a11yLive" class="sr-only" role="status" aria-live="polite"></div>
+
+<!-- 命令面板（Ctrl/Cmd + K） -->
+<div id="palette" class="hidden">
+  <div class="pal-mask"></div>
+  <div class="pal-panel">
+    <div class="pal-search">
+      <span class="pal-ic">⌘</span>
+      <input id="palQ" type="text" placeholder="输入命令或搜索…（↑↓ 选择，Enter 执行，Esc 关闭）" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="palList" class="pal-list"></div>
+    <div class="pal-foot muted">Ctrl / ⌘ + K 命令面板 · Ctrl+B / Ctrl+J 收放侧栏 · Esc 停止 · Ctrl+L 聚焦输入 · ↑ 编辑上一条</div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
