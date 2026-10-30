@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """SSE 事件契约：后端唯一事实源。
 
-前端 `web/app.js` 的 `handleFrame()` 必须覆盖这里列出的所有事件。
+前端 `web/js/05-chat.js` 的 `handleFrame()` 必须覆盖这里列出的所有事件。
 `verify/test_ui_contract.py` 会解析前端 switch，缺一个就失败——避免再次出现
 "后端已经发了、前端没人接"的静默断线（ask / tool_start / todo 就是这样丢了）。
 """

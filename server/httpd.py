@@ -1157,8 +1157,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._static('index.html')
             if path == '/app.css':
                 return self._static('app.css')
-            if path == '/app.js':
-                return self._static('app.js')
+            if path.startswith('/js/'):
+                # 拆分后的前端脚本（web/js/*.js，顺序加载，见 index.html）：
+                # 与 /vendor/ 同口径走 _static，越界校验与 no-cache 都在里面。
+                return self._static(path.lstrip('/'))
             if path == '/api/sessions':
                 return self._json({"sessions": self.app.sessions.list_all()})
             if path == '/api/session':
@@ -1369,7 +1371,7 @@ class Handler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(name)[0] or 'application/octet-stream'
         self.send_response(200)
         self.send_header('Content-Type', f'{ctype}; charset=utf-8')
-        # 禁用缓存：离线机升级后浏览器必须拿到最新 app.js/app.css，否则"改了个寂寞"
+        # 禁用缓存：离线机升级后浏览器必须拿到最新 js/*.js、app.css，否则"改了个寂寞"
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
         self.send_header('Pragma', 'no-cache')
         self.send_header('Expires', '0')
