@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""本地 Agent 工作台入口。
+"""加菲猫的工作室入口。
 
 用法:
     python app.py [--port 8080] [--host 127.0.0.1] [--config config.json]
@@ -221,7 +221,7 @@ def load_config(path: str) -> dict:
 
 
 def main():
-    ap = argparse.ArgumentParser(description='本地 Agent 工作台')
+    ap = argparse.ArgumentParser(description='加菲猫的工作室')
     ap.add_argument('--host', default=None)
     ap.add_argument('--port', type=int, default=None)
     ap.add_argument('--config', default=os.path.join(HERE, 'config.json'))

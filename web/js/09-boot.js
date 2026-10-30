@@ -90,7 +90,7 @@ h1{font-size:20px;margin:0 0 4px}.meta{color:#6b7290;font-size:12px;margin-botto
 <div class="pt"><span class="hint">Ctrl/Cmd + P 也可保存为 PDF</span>
   <button onclick="window.print()">打印 / 存为 PDF</button></div>
 <div class="wrap"><h1>${esc(s.title || '会话导出')}</h1>
-<div class="meta">导出时间 ${new Date().toLocaleString()} · ${(s.messages || []).length} 条消息 · 本地 Agent 工作台</div>
+<div class="meta">导出时间 ${new Date().toLocaleString()} · ${(s.messages || []).length} 条消息 · 加菲猫的工作室</div>
 ${parts}</div></body></html>`;
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const a = document.createElement('a');

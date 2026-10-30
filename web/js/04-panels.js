@@ -283,7 +283,8 @@ initResizer($('#rzRight'), 'right');
 
 /* ── 顶栏动作收纳：<1280px 把次要动作搬进「⋯」菜单 ─────────────
    同一个 DOM 节点搬家，id 绑定与状态都不变；≥1280px 自动搬回平铺，
-   窄桌面窗口也能继续访问次要操作。 */
+   窄桌面窗口也能继续访问次要操作。模型选择框住在 .ch-cluster 里，
+   搬回时插回簇首（appendChild 会把它扔到栏尾，簇就散了）。 */
 const HEAD_OVERFLOW = ['#modelSel', '#btnBatch', '#btnExport'];
 const headMq = window.matchMedia('(max-width: 1280px)');
 function closeMoreMenu() {
@@ -296,10 +297,16 @@ function syncHeadActions() {
   const bar = $('#chActions'), menu = $('#moreMenu');
   if (!bar || !menu) return;
   const narrow = headMq.matches;
-  const target = narrow ? menu : bar;
+  const cluster = document.querySelector('.ch-cluster');
   HEAD_OVERFLOW.forEach((sel) => {
     const el = document.querySelector(sel);
-    if (el && el.parentElement !== target) target.appendChild(el);
+    if (!el) return;
+    if (sel === '#modelSel' && !narrow && cluster) {
+      if (el.parentElement !== cluster) cluster.insertBefore(el, cluster.firstChild);
+      return;
+    }
+    const target = narrow ? menu : bar;
+    if (el.parentElement !== target) target.appendChild(el);
   });
   if (!narrow) closeMoreMenu();
 }

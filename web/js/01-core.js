@@ -1,4 +1,4 @@
-/* 本地 Agent 工作台前端 */
+/* 加菲猫的工作室前端 */
 'use strict';
 
 if (location.protocol === 'file:') {
@@ -10,7 +10,7 @@ if (location.protocol === 'file:') {
     .muted{color:#9aa0aa;font-size:12px;margin-top:14px}
   </style>
   <div id="fh">
-    <h1>💼 本地 Agent 工作台</h1>
+    <h1>💼 加菲猫的工作室</h1>
     <p>检测到正在以 <code>file://</code> 方式直接打开页面，本应用需要本地服务才能运行（流式聊天 / 文件访问 / 记忆库）。</p>
     <p>请在项目目录运行：<code>python app.py</code>，然后访问 <code>http://127.0.0.1:8080</code>。</p>
     <p class="muted">正在探测 127.0.0.1:8080 上是否已有服务在运行…</p>
@@ -187,7 +187,8 @@ function syncThemeBtn() {
   const dark = document.documentElement.getAttribute('data-theme') === 'dark';
   const b = $('#btnTheme');
   if (b) {
-    b.innerHTML = ico(dark ? 'sun' : 'moon');
+    // 主题按钮住在「⋯」菜单里，光秃秃一个图标看不懂，补上文字
+    b.innerHTML = ico(dark ? 'sun' : 'moon') + '<span>' + (dark ? '浅色主题' : '深色主题') + '</span>';
     b.title = dark ? '当前深色，点击切到浅色' : '当前浅色，点击切到深色';
     b.setAttribute('aria-label', b.title);
   }

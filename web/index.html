@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>本地 Agent 工作台</title>
+<title>加菲猫的工作室</title>
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/vendor/github.min.css" id="hlLight">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hlDark" disabled>
@@ -15,7 +15,7 @@
   <div id="netBanner" class="hidden">⚠️ 与本地服务断开，正在重连…</div>
   <aside id="sidebar">
     <div class="sb-head">
-      <div class="logo"><span class="logo-mark">AI</span><span class="logo-txt">本地 Agent 工作台</span></div>
+      <div class="logo"><span class="logo-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5.2 8.4 3.5 3.6 9.2 5.7C10.2 5 11.1 4.6 12 4.6s1.8.4 2.8 1.1l5.7-2.1-1.7 4.8c2 1.5 3.2 3.6 3.2 5.9 0 4.3-3.6 7.1-10 7.1S2 18.6 2 14.3c0-2.3 1.2-4.4 3.2-5.9Z" fill="#ffffff"/><circle cx="9" cy="12.6" r="1.4" fill="#1b1e2e"/><circle cx="15" cy="12.6" r="1.4" fill="#1b1e2e"/><path d="M11 15.4h2l-1 1.5Z" fill="#1b1e2e"/><path d="M12 16.9c-.3.9-1 1.3-1.8 1.1M12 16.9c.3.9 1 1.3 1.8 1.1" fill="none" stroke="#1b1e2e" stroke-width=".9" stroke-linecap="round"/></svg></span><span class="logo-txt">加菲猫的工作室</span></div>
       <button id="btnNew" class="btn primary block">＋ 新会话</button>
       <div class="sb-search">
         <span class="sb-search-ic">
@@ -51,6 +51,7 @@
         <div id="chatMeta"></div>
       </div>
       <div class="ch-actions" id="chActions">
+      <div class="ch-cluster">
       <select id="modelSel" class="btn ghost small" title="临时切换模型（仅本会话生效，用于对比/降级）">
         <option value="">模型：默认</option>
       </select>
@@ -66,7 +67,7 @@
         </div>
       </div>
       <button id="btnCompact" class="btn ghost small hidden" title="立即压缩本会话历史：更早的对话换成摘要，释放上下文（完整对话仍可回看/导出）">压缩历史</button>
-      <button id="btnTheme" class="btn ghost small" title="切换深/浅色主题（设置里也能改）" aria-label="切换深浅主题"></button>
+      </div>
       <button id="btnBatch" class="btn ghost small" title="批量作业：一个目录一次跑完，带台账 / 暂停 / 重试 / 导出 CSV"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg> 批量作业</button>
       <button id="btnExport" class="btn ghost small" title="导出本会话为 Markdown">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>导出
@@ -74,7 +75,7 @@
       </div>
       <div class="ch-more">
         <button id="btnMore" class="btn ghost small" title="更多操作" aria-haspopup="true" aria-expanded="false" aria-label="更多操作">⋯</button>
-        <div id="moreMenu" class="more-menu hidden" role="menu" aria-label="更多操作"></div>
+        <div id="moreMenu" class="more-menu hidden" role="menu" aria-label="更多操作"><button id="btnTheme" class="btn" title="切换深/浅色主题（设置里也能改）" aria-label="切换深浅主题"></button></div>
       </div>
     </header>
     <div id="selBar" class="hidden">
@@ -86,14 +87,14 @@
     <div id="messages" role="log" aria-label="对话内容"></div>
     <button id="jumpBottom" class="hidden" title="回到底部" aria-label="回到底部">↓</button>
     <div id="welcome" class="hidden">
-      <div class="w-logo"><span>AI</span></div>
+      <div class="w-logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5.2 8.4 3.5 3.6 9.2 5.7C10.2 5 11.1 4.6 12 4.6s1.8.4 2.8 1.1l5.7-2.1-1.7 4.8c2 1.5 3.2 3.6 3.2 5.9 0 4.3-3.6 7.1-10 7.1S2 18.6 2 14.3c0-2.3 1.2-4.4 3.2-5.9Z" fill="#ffffff"/><circle cx="9" cy="12.6" r="1.4" fill="#1b1e2e"/><circle cx="15" cy="12.6" r="1.4" fill="#1b1e2e"/><path d="M11 15.4h2l-1 1.5Z" fill="#1b1e2e"/><path d="M12 16.9c-.3.9-1 1.3-1.8 1.1M12 16.9c.3.9 1 1.3 1.8 1.1" fill="none" stroke="#1b1e2e" stroke-width=".9" stroke-linecap="round"/></svg></div>
       <h2>有什么可以帮你？</h2>
       <p>本地运行 · 数据不出本机 · 支持文件分析与产出</p>
       <div id="wStats" class="w-stats"></div>
       <div class="w-chips" id="wChips">
-        <button class="w-chip" data-q="写一份本周工作总结"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg> 写一份本周工作总结</button>
-        <button class="w-chip" data-q="分析 inputs 目录下的数据并汇报"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16v3M12 10v9M17 6v13"/></svg> 分析 inputs 里的数据</button>
-        <button class="w-chip" data-q="起草一份项目汇报的 PPT 大纲"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg> 起草 PPT 大纲</button>
+        <button class="w-chip" data-q="写一份本周工作总结"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg> 写一份本周工作总结<small>按会话记录整理成周报</small></button>
+        <button class="w-chip" data-q="分析 inputs 目录下的数据并汇报"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16v3M12 10v9M17 6v13"/></svg> 分析 inputs 里的数据<small>读表、汇总、出结论</small></button>
+        <button class="w-chip" data-q="起草一份项目汇报的 PPT 大纲"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg> 起草 PPT 大纲<small>给项目汇报搭结构</small></button>
       </div>
     </div>
 

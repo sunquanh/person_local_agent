@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""本地 Agent 工作台 · 一键启动器。
+"""加菲猫的工作室 · 一键启动器。
 
 平时双击「启动.bat」就行，这个文件是它背后干活的脚本。
 也可以在命令行直接用：
@@ -31,11 +31,11 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 CFG_PATH = os.path.join(HERE, 'config.json')
 EXAMPLE_PATH = os.path.join(HERE, 'config.example.json')
-TITLE = '本地 Agent 工作台'
+TITLE = '加菲猫的工作室'
 DEFAULT_PORT = 8080
 
 HELP = """
-本地 Agent 工作台 · 启动器
+加菲猫的工作室 · 启动器
 
   python start.py               按 config.json 启动
   python start.py 8081          指定端口
