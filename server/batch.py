@@ -81,21 +81,32 @@ class BatchRunner:
                 continue
             if not isinstance(job, dict) or not job.get('id'):
                 continue
-            # 重启后不自动烧模型：未跑完的置为暂停，等用户点「继续」
+            # 重启后不自动烧模型：未跑完的置为暂停，等用户点「继续」。
+            # 项级 running 同样是 stale 的（当时那项的 worker 随进程死了）：
+            # 不复位成 pending 的话，_next 永远跳过它、收尾条件又永远不满，
+            # 作业卡在"paused 但永远跑不完"。
             if job.get('status') in ('running', 'pending'):
                 job['status'] = 'paused'
                 job['note'] = '服务重启，已暂停；点「继续」接着跑'
+                for it in job.get('items') or []:
+                    if it.get('status') == 'running':
+                        it['status'] = 'pending'
+                        it['error'] = ''
             self.jobs[job['id']] = job
         if self.jobs:
             log.info('批量作业恢复: %d 个台账', len(self.jobs))
 
     def _persist(self, job: dict):
-        d = self._dir(job['id'])
-        d.mkdir(parents=True, exist_ok=True)
-        tmp = d / 'job.json.tmp'
-        tmp.write_text(json.dumps(job, ensure_ascii=False, indent=1),
-                       encoding='utf-8')
-        tmp.replace(d / 'job.json')
+        # 持锁写盘：_run_item 曾在锁外调 _persist，与 control() 的写盘
+        # 共用同一 job.json.tmp，内容会交错、replace 后剩半截 JSON。
+        # RLock：已持锁的调用方重入无碍。
+        with self._lock:
+            d = self._dir(job['id'])
+            d.mkdir(parents=True, exist_ok=True)
+            tmp = d / 'job.json.tmp'
+            tmp.write_text(json.dumps(job, ensure_ascii=False, indent=1),
+                           encoding='utf-8')
+            tmp.replace(d / 'job.json')
 
     def _ledger(self, job: dict, item: dict):
         """items.jsonl：只追加的执行台账（事后排查/统计用）。"""
@@ -237,19 +248,34 @@ class BatchRunner:
 
     # ── worker ───────────────────────────────────────────────
     def _next(self):
-        """挑下一个要跑的 (job, item)；没有就返回 None。"""
+        """挑下一个要跑的 (job, item) 并原子认领；没有就返回 None。
+
+        认领（pending→running + 登记 _cur + 落盘）在同一把锁内完成：
+        旧版只在锁内"挑"，_run_item 在锁外改状态，中间 control('cancel')
+        能把该项标 canceled 却拦不住它随后开跑（且 _cur_agent 还没挂上，
+        request_stop 也递不到）。
+        """
         with self._lock:
             for job in self.jobs.values():
                 if job.get('status') != 'running':
                     continue
                 for it in job['items']:
                     if it['status'] == 'pending':
+                        it['status'] = 'running'
+                        it['error'] = ''
+                        self._cur = (job['id'], it['idx'])
+                        self._persist(job)
                         return job, it
                 # 没有待办项：收尾
                 if not any(i['status'] == 'running' for i in job['items']):
+                    failed_n = sum(1 for i in job['items']
+                                   if i['status'] == 'failed')
                     job['status'] = 'done'
                     job['done_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
-                    job['note'] = job.get('note') or ''
+                    # 全失败也落 done（已无待办、是终态），但备注写清失败数，
+                    # 否则界面上"已完成"看起来像全成功。
+                    job['note'] = (f'{failed_n} 项失败，见条目错误信息'
+                                   if failed_n else (job.get('note') or ''))
                     self._persist(job)
         return None
 
@@ -269,39 +295,43 @@ class BatchRunner:
                 self._run_item(job, item)
             except Exception as e:
                 log.exception('批量作业执行异常: %s', item.get('file'))
-                item['status'] = 'failed'
-                item['error'] = f'{type(e).__name__}: {e}'
-            finally:
                 with self._lock:
-                    self._cur = None
-                    self._cur_agent = None
-                    # 预览模式：前 3 项跑完先停，等用户看结果再继续
-                    if (job.get('preview') and job.get('status') == 'running'
-                            and not job.get('previewed')):
-                        done_n = sum(1 for i in job['items']
-                                     if i['status'] == 'done')
-                        rest = sum(1 for i in job['items']
-                                   if i['status'] == 'pending')
-                        if done_n >= _PREVIEW_N and rest:
-                            job['previewed'] = True
-                            job['status'] = 'paused'
-                            job['note'] = (f'预览完成：前 {done_n} 项已跑完，'
-                                           f'点「继续」执行其余 {rest} 项')
-                    self._persist(job)
-                    self._ledger(job, dict(item))
+                    item['status'] = 'failed'
+                    item['error'] = f'{type(e).__name__}: {e}'
+            finally:
+                # 收尾落盘失败也不能杀死 worker 线程：否则整个批量停摆且无声。
+                # _persist/_ledger 自身的异常在此消化、记日志，循环继续。
+                try:
+                    with self._lock:
+                        self._cur = None
+                        self._cur_agent = None
+                        # 预览模式：前 3 项跑完先停，等用户看结果再继续
+                        if (job.get('preview') and job.get('status') == 'running'
+                                and not job.get('previewed')):
+                            done_n = sum(1 for i in job['items']
+                                         if i['status'] == 'done')
+                            rest = sum(1 for i in job['items']
+                                       if i['status'] == 'pending')
+                            if done_n >= _PREVIEW_N and rest:
+                                job['previewed'] = True
+                                job['status'] = 'paused'
+                                job['note'] = (f'预览完成：前 {done_n} 项已跑完，'
+                                               f'点「继续」执行其余 {rest} 项')
+                        self._persist(job)
+                        self._ledger(job, dict(item))
+                except Exception:
+                    log.exception('批量作业收尾持久化失败: %s', item.get('file'))
             self._wake.set()
 
     def _run_item(self, job: dict, item: dict):
-        """跑单项：独立 Agent + 独立上下文（互不污染）。"""
-        from datetime import date
-        item['status'] = 'running'
-        item['error'] = ''
-        with self._lock:
-            self._cur = (job['id'], item['idx'])
-        self._persist(job)
+        """跑单项：独立 Agent + 独立上下文（互不污染）。
 
+        认领已在 _next 内完成（status 已是 running、_cur 已登记），
+        这里不再碰状态；结果写回时持锁，并以 job 的取消状态为准。
+        """
+        from datetime import date
         ctx = SessionCtx(f"batch-{job['id']}", job['name'],
-                          date.today().strftime('%Y-%m-%d'))
+                         date.today().strftime('%Y-%m-%d'))
         agent = self.app.make_batch_agent(ctx)
         with self._lock:
             self._cur_agent = agent
@@ -331,14 +361,20 @@ class BatchRunner:
                 self._cur_agent = None
         item['elapsed'] = round(time.monotonic() - t0, 1)
 
-        if r.get('stopped'):
-            item['status'] = 'canceled'
-            item['error'] = '已停止'
-        else:
-            item['status'] = 'done'
-            item['response'] = str(r.get('response') or '')[:_KEEP_TEXT]
-            item['artifacts'] = [a.get('rel', '') if isinstance(a, dict) else str(a)
-                                 for a in (r.get('artifacts') or [])]
+        # 结果写回持锁：取消可能恰好落在 agent.run 返回之后，control 已把
+        # job/item 标 canceled；此时再写 done 会把"已取消"盖回去。
+        with self._lock:
+            if job.get('status') == 'canceled':
+                item['status'] = 'canceled'
+                item['error'] = item.get('error') or '已停止'
+            elif r.get('stopped'):
+                item['status'] = 'canceled'
+                item['error'] = '已停止'
+            else:
+                item['status'] = 'done'
+                item['response'] = str(r.get('response') or '')[:_KEEP_TEXT]
+                item['artifacts'] = [a.get('rel', '') if isinstance(a, dict) else str(a)
+                                     for a in (r.get('artifacts') or [])]
         log.info('批量作业 %s 项 %d/%d: %s -> %s (%.1fs)',
                  job['name'], item['idx'] + 1, total, item['file'],
                  item['status'], item['elapsed'] or 0)

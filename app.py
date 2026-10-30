@@ -99,23 +99,116 @@ def check_env(cfg: dict) -> bool:
     return True
 
 
+def _coerce_int(value, field: str) -> int:
+    """配配置里的整数：拒绝 bool/float/非数字字符串，数字字符串转 int。"""
+    if isinstance(value, bool):
+        raise ValueError(f'配置 {field} 必须是整数，收到布尔值')
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().lstrip('-').isdigit():
+        return int(value.strip())
+    raise ValueError(f'配置 {field} 必须是整数，收到 {value!r}')
+
+
+def _coerce_number(value, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f'配置 {field} 必须是数字，收到布尔值')
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            pass
+    raise ValueError(f'配置 {field} 必须是数字，收到 {value!r}')
+
+
+def validate_config(cfg: dict) -> dict:
+    """校验合并后的配置：已知字段的类型/范围不对就抛错，绝不带病启动。
+
+    未知 section/key 原样放过（向前兼容）；字符串型的数字只接受纯数字
+    串并转回 int/float，其余一律拒绝——旧版不校验时，port 写成 "abc"
+    会在绑定时崩、max_tokens 写错会在对话中途崩，报错离现场很远。
+    """
+    if not isinstance(cfg, dict):
+        raise ValueError('配置顶层必须是对象')
+    sections = {'model': dict, 'workspace': dict, 'server': dict,
+                'limits': dict, 'rag': dict, 'memory': dict,
+                'prompt': dict, 'mcp': dict, 'security': dict}
+    for name, typ in sections.items():
+        if name in cfg and not isinstance(cfg[name], typ):
+            raise ValueError(f'配置 {name} 必须是对象，收到 {cfg[name]!r}')
+    model = cfg.get('model') or {}
+    for k in ('base_url', 'api_key', 'name'):
+        if k in model and not isinstance(model[k], str):
+            raise ValueError(f'配置 model.{k} 必须是字符串')
+    if 'context_window' in model:
+        model['context_window'] = _coerce_int(model['context_window'],
+                                              'model.context_window')
+        if model['context_window'] < 0:
+            raise ValueError('配置 model.context_window 不能为负')
+    if 'max_tokens' in model:
+        model['max_tokens'] = _coerce_int(model['max_tokens'], 'model.max_tokens')
+        if model['max_tokens'] <= 0:
+            raise ValueError('配置 model.max_tokens 必须大于 0')
+    if 'thinking' in model and not isinstance(model['thinking'], str):
+        raise ValueError('配置 model.thinking 必须是字符串')
+    ws = cfg.get('workspace') or {}
+    if 'root' in ws:
+        if not isinstance(ws['root'], str) or not ws['root'].strip():
+            raise ValueError('配置 workspace.root 必须是非空字符串')
+    srv = cfg.get('server') or {}
+    if 'host' in srv and not isinstance(srv['host'], str):
+        raise ValueError('配置 server.host 必须是字符串')
+    if 'port' in srv:
+        srv['port'] = _coerce_int(srv['port'], 'server.port')
+        if not 1 <= srv['port'] <= 65535:
+            raise ValueError(f"配置 server.port 超出范围：{srv['port']}")
+    if 'auto_exit' in srv and not isinstance(srv['auto_exit'], bool):
+        raise ValueError('配置 server.auto_exit 必须是布尔值')
+    if 'auto_exit_grace_s' in srv:
+        srv['auto_exit_grace_s'] = _coerce_number(srv['auto_exit_grace_s'],
+                                                 'server.auto_exit_grace_s')
+        if srv['auto_exit_grace_s'] < 0:
+            raise ValueError('配置 server.auto_exit_grace_s 不能为负')
+    lim = cfg.get('limits') or {}
+    for k in ('max_upload_mb', 'chat_timeout_s', 'compress_threshold_chars'):
+        if k in lim:
+            lim[k] = _coerce_number(lim[k], f'limits.{k}')
+            if lim[k] < 0:
+                raise ValueError(f'配置 limits.{k} 不能为负')
+    rag = cfg.get('rag') or {}
+    if 'enabled' in rag and not isinstance(rag['enabled'], bool):
+        raise ValueError('配置 rag.enabled 必须是布尔值')
+    if 'top_k' in rag:
+        rag['top_k'] = _coerce_int(rag['top_k'], 'rag.top_k')
+        if rag['top_k'] <= 0:
+            raise ValueError('配置 rag.top_k 必须大于 0')
+    return cfg
+
+
 def load_config(path: str) -> dict:
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # 深拷贝默认
     if os.path.isfile(path):
         try:
             with open(path, encoding='utf-8') as f:
                 user = json.load(f)
-            for k, v in user.items():
-                if isinstance(v, dict) and isinstance(cfg.get(k), dict):
-                    cfg[k].update(v)
-                else:
-                    cfg[k] = v
         except Exception as e:
-            print(f"⚠️ 配置解析失败（{e}），使用默认配置")
+            # 配置文件存在但解析失败：绝不能静默用默认配置启动——默认的
+            # 工作台目录（~/我的工作台）可能根本不是用户的真实工作台，
+            # agent 会在错误的目录里读写。直接报错退出，让用户修配置。
+            raise ValueError(f'配置文件解析失败 {path}：{e}（请修复后重启）')
+        if not isinstance(user, dict):
+            raise ValueError(f'配置文件顶层必须是对象：{path}')
+        for k, v in user.items():
+            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+                cfg[k].update(v)
+            else:
+                cfg[k] = v
     else:
         print(f"⚠️ 未找到配置文件 {path}，已使用默认配置。"
               f"请参考 config.example.json 创建 config.json")
-    return cfg
+    return validate_config(cfg)
 
 
 def main():
@@ -128,7 +221,11 @@ def main():
                     help='关闭所有网页后不退出服务（默认会在 5 秒后退出）')
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except ValueError as e:
+        print(f"\n❌ {e}")
+        sys.exit(1)
     if args.host:
         cfg.setdefault('server', {})['host'] = args.host
     if args.port:

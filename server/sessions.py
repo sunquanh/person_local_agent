@@ -19,7 +19,8 @@ from pathlib import Path
 
 from agent.workspace import SessionCtx
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()  # 读-改-写序列（load→改→_save）全程持锁，防两请求交错丢更新；
+# RLock：同一线程内 _save / load 可重入，mutator 持锁时调它们不死锁。
 
 
 def _slug_title(title: str) -> str:
@@ -197,15 +198,17 @@ class SessionManager:
         return out
 
     def rename(self, sid: str, title: str):
-        s = self.load(sid)
-        s.title = _slug_title(title)
-        self._save(s)
+        with _LOCK:
+            s = self.load(sid)
+            s.title = _slug_title(title)
+            self._save(s)
 
     def set_pinned(self, sid: str, pinned: bool):
-        s = self.load(sid)
-        s.pinned = bool(pinned)
-        self._save(s)
-        return s.pinned
+        with _LOCK:
+            s = self.load(sid)
+            s.pinned = bool(pinned)
+            self._save(s)
+            return s.pinned
 
     def fork(self, sid: str, index: int) -> "Session":
         """从第 index 条消息（含）分叉出新会话，保留 messages[:index+1]。
@@ -213,31 +216,33 @@ class SessionManager:
         用于「从这里分支」：原会话不动，新会话接着这条继续，
         产物清单一并复制（文件是共享的，只是换个上下文继续聊）。
         """
-        s = self.load(sid)
-        idx = max(0, int(index))
-        if idx >= len(s.messages):
-            raise ValueError('分叉点超出消息范围')
-        keep = list(s.messages[:idx + 1])
-        if not keep:
-            raise ValueError('分叉点没有可保留的消息')
-        ns = self.create(s.title + ' · 分支')
-        ns.messages = keep
-        ns.artifacts = list(s.artifacts)
-        self._save(ns)
-        return ns
+        with _LOCK:
+            s = self.load(sid)
+            idx = max(0, int(index))
+            if idx >= len(s.messages):
+                raise ValueError('分叉点超出消息范围')
+            keep = list(s.messages[:idx + 1])
+            if not keep:
+                raise ValueError('分叉点没有可保留的消息')
+            ns = self.create(s.title + ' · 分支')
+            ns.messages = keep
+            ns.artifacts = list(s.artifacts)
+            self._save(ns)
+            return ns
 
     def truncate(self, sid: str, index: int) -> int:
         """删除第 index 条及其之后的消息，返回删除条数（不可恢复，调用方需二次确认）。"""
-        s = self.load(sid)
-        idx = max(0, int(index))
-        removed = len(s.messages) - idx
-        if removed <= 0:
-            return 0
-        s.messages = s.messages[:idx]
-        # 删消息会让压缩点下标失效，直接作废（下次可重新压）
-        s.compact = None
-        self._save(s)
-        return removed
+        with _LOCK:
+            s = self.load(sid)
+            idx = max(0, int(index))
+            removed = len(s.messages) - idx
+            if removed <= 0:
+                return 0
+            s.messages = s.messages[:idx]
+            # 删消息会让压缩点下标失效，直接作废（下次可重新压）
+            s.compact = None
+            self._save(s)
+            return removed
 
     def iter_all_messages(self):
         """遍历所有会话的所有消息（用于附件引用检查）。"""
@@ -257,68 +262,111 @@ class SessionManager:
 
     def delete(self, sid: str):
         import shutil
-        # sid 合法性由 _sdir 内的 _check_sid 保证：'../..' 之类到不了 rmtree。
-        shutil.rmtree(self._sdir(sid), ignore_errors=True)
+        # 持锁删：否则 _save 可能在 rmtree 之后重建目录，删掉的会话"复活"。
+        with _LOCK:
+            # sid 合法性由 _sdir 内的 _check_sid 保证：'../..' 之类到不了 rmtree。
+            shutil.rmtree(self._sdir(sid), ignore_errors=True)
 
     # ── 会话操作 ─────────────────────────────────────────────────
     def add_message(self, sid: str, role: str, content: str, extra: dict = None):
-        s = self.load(sid)
-        m = {"role": role, "content": content, "ts": time.time()}
-        if extra:
-            m.update(_slim_extra(extra))
-        s.messages.append(m)
-        if len(s.messages) > 400:
-            dropped = len(s.messages) - 400
-            s.messages = s.messages[-400:]
-            # 手动压缩点随消息前移同步左移，否则压缩后会漏发/错位
-            cp = s.compact or {}
-            if cp:
-                cp['upto'] = max(0, int(cp.get('upto') or 0) - dropped)
-        self._save(s)
+        # load→改→save 全程持锁：两个 add_message 交错会各读旧列表、各 append、
+        # 后保存的覆盖先保存的，丢一条消息。只锁 _save 不够。
+        with _LOCK:
+            s = self.load(sid)
+            m = {"role": role, "content": content, "ts": time.time()}
+            if extra:
+                m.update(_slim_extra(extra))
+            s.messages.append(m)
+            if len(s.messages) > 400:
+                dropped = len(s.messages) - 400
+                s.messages = s.messages[-400:]
+                # 手动压缩点随消息前移同步左移，否则压缩后会漏发/错位
+                cp = s.compact or {}
+                if cp:
+                    cp['upto'] = max(0, int(cp.get('upto') or 0) - dropped)
+            self._save(s)
 
     def set_compact(self, sid: str, summary: str, upto: int, stats: dict = None) -> dict:
         """记录一次手动压缩：upto 之前的消息不再发给模型（原始消息全保留）。"""
-        s = self.load(sid)
-        rec = {"summary": str(summary or ''), "upto": max(0, int(upto or 0)),
-               "ts": datetime.now().isoformat(timespec='seconds')}
-        if stats:
-            rec.update({k: stats[k] for k in
-                        ('before_msgs', 'after_msgs', 'before_chars',
-                         'after_chars', 'est_tokens', 'saved_pct') if k in stats})
-        s.compact = rec
-        self._save(s)
-        return rec
+        with _LOCK:
+            s = self.load(sid)
+            rec = {"summary": str(summary or ''), "upto": max(0, int(upto or 0)),
+                   "ts": datetime.now().isoformat(timespec='seconds')}
+            if stats:
+                rec.update({k: stats[k] for k in
+                            ('before_msgs', 'after_msgs', 'before_chars',
+                             'after_chars', 'est_tokens', 'saved_pct') if k in stats})
+            s.compact = rec
+            self._save(s)
+            return rec
 
     def clear_compact(self, sid: str) -> bool:
         """撤销手动压缩，恢复完整历史。"""
-        s = self.load(sid)
-        had = bool(s.compact)
-        s.compact = None
-        self._save(s)
-        return had
+        with _LOCK:
+            s = self.load(sid)
+            had = bool(s.compact)
+            s.compact = None
+            self._save(s)
+            return had
 
     def mark_turn_undone(self, sid: str, turn: str) -> bool:
         """标记某一轮已撤销，历史里不再显示可重复撤销的按钮。"""
-        s = self.load(sid)
-        changed = False
-        for m in s.messages:
-            snap = m.get('snapshot')
-            if isinstance(snap, dict) and str(snap.get('turn')) == str(turn):
-                snap['undone'] = True
-                changed = True
-        if changed:
-            self._save(s)
-        return changed
+        with _LOCK:
+            s = self.load(sid)
+            changed = False
+            for m in s.messages:
+                snap = m.get('snapshot')
+                if isinstance(snap, dict) and str(snap.get('turn')) == str(turn):
+                    snap['undone'] = True
+                    changed = True
+            if changed:
+                self._save(s)
+            return changed
 
     def register_artifacts(self, sid: str, rels: list):
         """登记本轮产物（去重 + 持久化）。产物面板读取此清单。"""
         if not rels:
             return
-        s = self.load(sid)
-        for r in rels:
-            if r not in s.artifacts:
-                s.artifacts.append(r)
-        self._save(s)
+        with _LOCK:
+            s = self.load(sid)
+            for r in rels:
+                if r not in s.artifacts:
+                    s.artifacts.append(r)
+            self._save(s)
+
+    def remove_attachment(self, sid: str, ts: float, path: str) -> str:
+        """从 ts 附近的用户消息里删掉一个附件引用（load→改→save 持锁）。
+
+        返回 'removed' / 'no_message'（附近无用户消息）/ 'no_attachment'
+        （消息里没有这个附件）；物理文件回收由调用方在确认无其他会话引用后做。
+        """
+        with _LOCK:
+            s = self.load(sid)
+            cands = [m for m in s.messages
+                     if m.get('role') == 'user' and abs((m.get('ts') or 0) - ts) <= 5]
+            if not cands:
+                return 'no_message'
+            m = min(cands, key=lambda x: abs((x.get('ts') or 0) - ts))
+            atts = m.get('attachments') or []
+            kept = [a for a in atts
+                    if (a if isinstance(a, str) else (a or {}).get('path', '')) != path]
+            if len(kept) == len(atts):
+                return 'no_attachment'
+            m['attachments'] = kept
+            self._save(s)
+            return 'removed'
+
+    def pop_trailing_assistant(self, sid: str) -> int:
+        """删掉末尾连续的 assistant 消息（重新生成用），返回删掉的条数。"""
+        with _LOCK:
+            s = self.load(sid)
+            n = 0
+            while s.messages and s.messages[-1].get('role') == 'assistant':
+                s.messages.pop()
+                n += 1
+            if n:
+                self._save(s)
+            return n
 
     def session_ctx(self, s: Session) -> SessionCtx:
         """构造当前会话上下文（供 workspace 路由 outputs 子目录）。"""

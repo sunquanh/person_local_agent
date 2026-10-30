@@ -147,10 +147,21 @@ class ConfirmBox:
             self.send('confirm', command=cmd)
         except Exception:
             return False
-        if not self.event.wait(timeout=180):
-            log.warning('危险命令确认超时，按拒绝处理: %s', cmd[:120])
-            return False
-        return bool(self.result)
+        # 与 ask() 同口径：1 秒一片轮询，客户端断开立即按拒绝返回，
+        # 不空等满 180s 占着 agent 线程（旧版 event.wait(180) 一次等满）。
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            if self.event.wait(timeout=1):
+                return bool(self.result)
+            if self.alive is not None:
+                try:
+                    if not self.alive():
+                        log.warning('确认期间客户端断开，按拒绝处理: %s', cmd[:120])
+                        return False
+                except Exception:
+                    pass
+        log.warning('危险命令确认超时，按拒绝处理: %s', cmd[:120])
+        return False
 
     def ask(self, question: str, options=None) -> str:
         self.answer = None
@@ -241,25 +252,13 @@ def _delete_attachment_ref(app, sid: str, ts: float, path: str):
         # _sdir 校验 sid 失败（'../..' 之类）：同样按“不存在”处理，不抛 500。
         return '会话不存在'
     try:
-        s = app.sessions.load(sid)
+        outcome = app.sessions.remove_attachment(sid, ts, path)
     except Exception:
         return '会话不存在'
-
-    def _key(a):
-        return a if isinstance(a, str) else (a or {}).get('path', '')
-
-    # 用户消息可能在数秒内连发（测试/快速操作），取 ts 最近的一条
-    cands = [m for m in s.messages
-             if m.get('role') == 'user' and abs((m.get('ts') or 0) - ts) <= 5]
-    if not cands:
+    if outcome == 'no_message':
         return '消息不存在'
-    m = min(cands, key=lambda x: abs((x.get('ts') or 0) - ts))
-    atts = m.get('attachments') or []
-    kept = [a for a in atts if _key(a) != path]
-    if len(kept) == len(atts):
+    if outcome == 'no_attachment':
         return '该消息没有此附件'
-    m['attachments'] = kept
-    app.sessions._save(s)
     # 物理文件回收：仅删 inputs/ 内、且没有任何会话再引用的文件
     if not _path_referenced_anywhere(app, path):
         try:
@@ -321,6 +320,7 @@ class AgentServer:
         self._busy = False
         self._busy_owner = None    # 持有 _busy 的请求凭证（防止误放别人的锁）
         self._busy_lock = threading.Lock()
+        self._queue_lock = threading.Lock()  # 排队队列的 append/remove/队首判断
         self._queue = []       # 排队中的 SSE 连接（Handler 实例，按序执行）
         self._jobs = []        # 最近完成的任务（内存，最多 20 条）
         self._running = None   # 当前正在跑的 Agent 实例（/api/stop 用）
@@ -469,8 +469,15 @@ class AgentServer:
         return len(self._pages)
 
     def page_touch(self, pid: str) -> None:
-        if pid and pid in self._pages:
-            self._pages[pid] = time.time()
+        # upsert：心跳本身就是"页面活着"的证明。只更新已登记 pid 时，
+        # 服务重启后旧标签的心跳全被丢弃，_pages_seen 永不置位，
+        # 自动退出 silently 失效（服务再也不退）。
+        if not pid:
+            return
+        if pid not in self._pages:
+            self._pages_seen = True
+        self._pages[pid] = time.time()
+        self._pages_empty_at = 0.0
 
     def page_close(self, pid: str) -> int:
         if pid:
@@ -932,6 +939,16 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     server_version = 'AgentWorkbench/1.0'
 
+    def setup(self):
+        super().setup()
+        # 慢客户端（半开连接）无限占 handler 线程：120 秒 socket 超时兜底。
+        # SSE 长流不受影响——写超时只会让 send() 吞错，随后 _client_alive
+        # 发现断开、退出等待；_client_alive 探测时会暂存并还原本超时。
+        try:
+            self.connection.settimeout(120)
+        except Exception:
+            pass
+
     # ── 辅助 ─────────────────────────────────────────────────────
     @property
     def app(self) -> AgentServer:
@@ -998,10 +1015,13 @@ class Handler(BaseHTTPRequestHandler):
         """探测客户端连接是否还活着（浏览器关页/断网时快速退出等待，不占线程）。
 
         非阻塞 recv + MSG_PEEK：有数据/无数据都视为活着，只有连接已关闭才返回 False。
+        探测期间的超时设置用完还原：Handler.setup() 给连接设了 120 秒超时，
+        旧版 setblocking(True) 会把它清掉（变回永不超时）。
         """
         try:
             import socket
-            self.connection.setblocking(False)
+            old_timeout = self.connection.gettimeout()
+            self.connection.settimeout(0)
             try:
                 got = self.connection.recv(1, socket.MSG_PEEK)
                 # 空字节 = 对端已关闭（FIN），必须视为断开——否则排队任务会挂满超时
@@ -1011,8 +1031,8 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 return False
             finally:
-                # 必须恢复阻塞：否则后续 SSE wfile.write 可能 BlockingIOError，帧被静默丢弃
-                self.connection.setblocking(True)
+                # 还原探测前的超时（而不是 setblocking(True) 清掉它）
+                self.connection.settimeout(old_timeout)
         except Exception:
             return True
 
@@ -1039,20 +1059,27 @@ class Handler(BaseHTTPRequestHandler):
         """校验访问令牌：Authorization: Bearer / ?t= / cookie 三选一。
 
         只监听回环地址时 access_token 为空，直接放行（本地单机无认证负担）。
+        同时记下认证方式（self._auth_via）：写请求的 CSRF 判定要区分
+        cookie（浏览器自动带，需严格同源）与 Bearer/?t=（调用方显式给，
+        不受跨站影响），见 _mutation_allowed。
         """
         app = self.app
         tok = app.access_token
+        self._auth_via = ''
         if not tok:
+            self._auth_via = 'none'
             self._issue_client_cookie()
             return True
         h = self.headers.get('Authorization') or ''
         if h.startswith('Bearer ') and secrets.compare_digest(h[7:].strip(), tok):
+            self._auth_via = 'bearer'
             self._issue_client_cookie()
             return True
         qs = parse_qs(urlparse(self.path).query)
         q = (qs.get('t') or [''])[0]
         if q and secrets.compare_digest(q, tok):
             # 首次带 ?t= 访问：种 cookie，之后地址栏不再暴露令牌
+            self._auth_via = 'query'
             self._pending_cookie = tok
             self._issue_client_cookie()
             return True
@@ -1060,21 +1087,41 @@ class Handler(BaseHTTPRequestHandler):
         for part in ck.split(';'):
             k, _, v = part.strip().partition('=')
             if k == 'wbtoken' and secrets.compare_digest(v.strip(), tok):
+                self._auth_via = 'cookie'
                 self._issue_client_cookie()
                 return True
         return False
 
-    def _same_origin_request(self) -> bool:
-        """验证浏览器写请求的来源；无来源头时保留本机脚本/CLI兼容。"""
+    def _same_origin_request(self, require_header: bool = False) -> bool:
+        """验证浏览器写请求的来源。
+
+        无来源头时默认放行（本机脚本/CLI 兼容）；require_header=True 时
+        无来源头也拒绝——cookie 认证的写请求必须能证明来源，否则
+        no-referrer 的恶意页面仅凭自动带的 cookie 就能跨站改配置。
+        """
         source = self.headers.get('Origin') or self.headers.get('Referer')
         if not source:
-            return True
+            return not require_header
         try:
             parsed = urlparse(source)
             host = (self.headers.get('Host') or '').lower()
             return parsed.scheme in ('http', 'https') and parsed.netloc.lower() == host
         except Exception:
             return False
+
+    def _mutation_allowed(self) -> bool:
+        """写请求是否放行（CSRF 门禁）。
+
+        - 回环无令牌模式：本机单用户，沿用现有行为。
+        - Bearer / ?t= 认证：调用方显式给令牌，浏览器不会自动带，
+          不受跨站影响，直接放行（CLI/脚本走 ?t= 不受影响）。
+        - cookie 认证：必须严格同源（来源头齐全且匹配），无来源头拒绝。
+        """
+        if not self.app.access_token:
+            return True
+        if getattr(self, '_auth_via', '') in ('bearer', 'query'):
+            return True
+        return self._same_origin_request(require_header=True)
 
     def _auth_fail(self):
         """未认证：页面请求给登录页，API 请求给 401 JSON。"""
@@ -1205,6 +1252,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/settings':
                 return self._json(self._settings())
             if path == '/api/rag/index':
+                # GET 但有副作用（重建索引）：走写请求的 CSRF 门禁，
+                # 否则任意网页一次顶级导航就能凭 cookie 触发。
+                if not self._mutation_allowed():
+                    return self._err(403, '跨站请求已拒绝')
                 return self._json(self.app.rag.refresh())
             if path == '/api/rag/search':
                 q = (qs.get('q') or [''])[0]
@@ -1555,7 +1606,7 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
         if not self._auth_ok():
             return self._auth_fail()
-        if not self._same_origin_request():
+        if not self._mutation_allowed():
             return self._err(403, '跨站请求已拒绝')
         try:
             if path == '/api/chat':
@@ -1579,12 +1630,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/session/regenerate':
                 d = json.loads(self._read_body() or b'{}')
                 try:
-                    s = self.app.sessions.load(d['id'])
+                    self.app.sessions.pop_trailing_assistant(d['id'])
                 except (ValueError, FileNotFoundError):
                     return self._err(404, '会话不存在')
-                while s.messages and s.messages[-1].get('role') == 'assistant':
-                    s.messages.pop()
-                self.app.sessions._save(s)
                 return self._json({"ok": True})
             if path == '/api/session/fork':
                 # 从某条消息分叉出新会话（「从这里分支」）
@@ -2018,6 +2066,14 @@ class Handler(BaseHTTPRequestHandler):
                     app._busy_owner = None
                     app._busy = False
 
+        def _dequeue():
+            """把自己移出排队队列（持 _queue_lock，兜底 ValueError）。"""
+            with app._queue_lock:
+                try:
+                    app._queue.remove(self)
+                except ValueError:
+                    pass
+
         try:
             d = json.loads(self._read_body() or b'{}')
             message = (d.get('message') or '').strip()
@@ -2088,35 +2144,36 @@ class Handler(BaseHTTPRequestHandler):
                         pass
 
             # ── 排队：单任务串行，后到者先推 queued 帧再等待 ──────
-            app._queue.append(self)
-            if len(app._queue) > 1 or app.busy:
-                raw_send(f"data: {json.dumps({'type': 'queued', 'position': len(app._queue)}, ensure_ascii=False)}\n\n".encode('utf-8'))
+            # 队列的 append/remove/队首判断全程持 _queue_lock：裸 list 操作
+            # 单步虽原子，但"判断队首→占 busy"的组合判断会交错。
+            with app._queue_lock:
+                app._queue.append(self)
+                queued = len(app._queue) > 1 or app.busy
+                position = len(app._queue)
+            if queued:
+                raw_send(f"data: {json.dumps({'type': 'queued', 'position': position}, ensure_ascii=False)}\n\n".encode('utf-8'))
             wait_t0 = time.monotonic()
             wait_tick = 0
-            while app.busy or app._queue[0] is not self:
+            while True:
+                with app._queue_lock:
+                    at_head = bool(app._queue) and app._queue[0] is self
+                    busy = app.busy
+                if at_head and not busy:
+                    break
                 if time.monotonic() - wait_t0 > app.chat_timeout_s:
-                    try:
-                        app._queue.remove(self)
-                    except ValueError:
-                        pass
+                    _dequeue()
                     raw_send(f"data: {json.dumps({'type': 'error', 'message': '排队超时，已取消。请重试。'}, ensure_ascii=False)}\n\n".encode('utf-8'))
                     return
                 # 死连接感知：客户端已断开则退出排队，不挂满超时时间占线程
                 wait_tick += 1
                 if wait_tick % 4 == 0 and not self._client_alive():
-                    try:
-                        app._queue.remove(self)
-                    except ValueError:
-                        pass
+                    _dequeue()
                     return
                 time.sleep(0.5)
             with app._busy_lock:
                 app._busy = True
                 app._busy_owner = token
-                try:
-                    app._queue.remove(self)
-                except ValueError:
-                    pass
+                _dequeue()
 
             # ── 每个请求一个独立 Agent（回调各自绑定本连接，不串会话）──
             ctx = app.sessions.session_ctx(session)
@@ -2173,11 +2230,17 @@ class Handler(BaseHTTPRequestHandler):
             warned = False
             watch = {'deadline': t0 + app.chat_timeout_s}
             app._running_watch = watch
+            disconnected = False
             while not result_box and time.monotonic() < watch['deadline']:
                 t.join(0.5)
                 heart += 1
                 if heart % 20 == 0:
                     raw_send(b': ping\n\n')
+                # 运行期断连检测：排队期有，运行期旧版没有——关页后 handler
+                # 会等满超时才退出，白白占线程、agent 也继续烧模型。
+                if heart % 4 == 0 and not self._client_alive():
+                    disconnected = True
+                    break
                 # 快到时先问一声：离线大模型的长任务很常见，给用户「再等 5 分钟」的机会
                 if (not warned and app.chat_timeout_s >= 120
                         and time.monotonic() > watch['deadline'] - app.chat_timeout_s * 0.2):
@@ -2187,6 +2250,14 @@ class Handler(BaseHTTPRequestHandler):
                                   f'接近 {int(app.chat_timeout_s)} 秒上限；'
                                   f'内网大模型的长任务可点「再等 5 分钟」。'),
                          extendable=True)
+            if disconnected:
+                agent.request_stop()
+                t.join(2)
+                if t.is_alive():
+                    # 线程杀不掉（Python 无线程终止）：只记日志，等 agent
+                    # 注意到 stop 后自行退出；release_busy 在其 finally 里。
+                    log.warning('客户端断开后 agent 线程 2 秒内未退出，继续后台收尾')
+                return
             if not result_box:
                 agent.request_stop()
                 send('error',
@@ -2194,6 +2265,8 @@ class Handler(BaseHTTPRequestHandler):
                               f'可在 设置 → 运行 调大「单轮超时」后重试。'),
                      limit_s=int(app.chat_timeout_s))
                 t.join(2)
+                if t.is_alive():
+                    log.warning('看门狗超时后 agent 线程 2 秒内未退出，继续后台收尾')
                 return
 
             app._running = None
@@ -2266,10 +2339,7 @@ class Handler(BaseHTTPRequestHandler):
             app._running_owner = ''
             app._running_watch = None
             app._pending_confirm = None
-            try:
-                app._queue.remove(self)
-            except ValueError:
-                pass
+            _dequeue()
 
     def log_message(self, fmt, *args):
         pass  # 静默访问日志，避免刷屏
@@ -2689,6 +2759,141 @@ class AgentHTTPServer(ThreadingHTTPServer):
     allow_reuse_port = False
     daemon_threads = True
 
+    def server_close(self):
+        # 正常退出时删实例锁；崩溃/os._exit 残留的锁由下次启动的探活接管。
+        try:
+            _release_instance_lock(
+                getattr(getattr(self, 'agent_server', None),
+                        '_instance_lock_path', None))
+        except Exception:
+            pass
+        super().server_close()
+
+
+def _probe_workbench(host: str, port: int) -> bool:
+    """指定地址上是不是已有一个工作台（/api/health 的特征字段）。
+
+    与 start.py 的 looks_like_workbench 同口径：只认字段，不认状态码。
+    """
+    probe_host = '127.0.0.1' if host in ('0.0.0.0', '', '::') else host
+    try:
+        import urllib.request
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open('http://%s:%d/api/health' % (probe_host, port),
+                         timeout=2.0) as r:
+            data = json.loads(r.read().decode('utf-8', 'replace'))
+        return (isinstance(data, dict) and data.get('ok') is True
+                and 'auth_required' in data and 'uptime_s' in data)
+    except Exception:
+        return False
+
+
+def _pid_alive(pid: int) -> bool:
+    """pid 对应的进程是否还活着（Windows 上信号语义不同，查不到就当活着）。"""
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+
+
+def _acquire_instance_lock(ws_root, host: str, port: int):
+    """工作台实例锁：防两个进程同跑一个工作台目录（会话/快照/MCP 全会打架）。
+
+    锁文件在 <工作台>/.agent/server.lock，O_EXCL 独占创建，内容是
+    {pid, host, port}。返回锁路径；拿不到且确认已有活实例时抛 RuntimeError；
+    锁文件本身写不下时警告并返回 None（降级运行，不因锁机制拦启动）。
+    stale 锁（崩溃、os._exit 残留）靠探活 + pid 双重判定后接管：
+    探活命中或 pid 活着都拒绝启动并明说删锁办法，绝不静默双开。
+    """
+    lock_path = Path(ws_root) / '.agent' / 'server.lock'
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.warning('实例锁目录不可写，跳过实例锁: %s', e)
+        return None
+    payload = json.dumps({'pid': os.getpid(), 'host': host, 'port': port,
+                          'started': time.strftime('%Y-%m-%d %H:%M:%S')})
+    for _ in range(6):
+        try:
+            fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                os.write(fd, payload.encode('utf-8'))
+            finally:
+                os.close(fd)
+            return lock_path
+        except FileExistsError:
+            pass
+        except OSError as e:
+            log.warning('实例锁创建失败，跳过实例锁: %s', e)
+            return None
+        # 锁已存在：对方可能正在启动（锁已建、端口未绑），等一会儿再探活。
+        try:
+            old = json.loads(lock_path.read_text(encoding='utf-8'))
+        except Exception:
+            old = {}
+        old_host = str(old.get('host') or '127.0.0.1')
+        try:
+            old_port = int(old.get('port') or 0)
+        except (TypeError, ValueError):
+            old_port = 0
+        try:
+            old_pid = int(old.get('pid') or 0)
+        except (TypeError, ValueError):
+            old_pid = 0
+        if old_port and _probe_workbench(old_host, old_port):
+            raise RuntimeError(
+                f'已有工作台实例在运行（{old_host}:{old_port}），不用再起一个。')
+        if old_pid and not _pid_alive(old_pid):
+            break  # 进程已死：stale 锁，接管
+        # pid 活着但探活失败：对方可能正在启动（锁已建、端口未绑），
+        # 再等几轮；6 轮后仍探不到才拒绝（宁可拒绝双开，不冒险接管）。
+        last_old_pid = old_pid
+        time.sleep(0.4)
+    else:
+        if last_old_pid and _pid_alive(last_old_pid):
+            raise RuntimeError(
+                f'疑似已有工作台实例在运行（PID {last_old_pid}），'
+                f'为防双开已拒绝启动。确认没有实例在跑后，'
+                f'可删除 {lock_path} 再启动。')
+    # 接管 stale 锁
+    try:
+        lock_path.unlink()
+    except OSError:
+        pass
+    try:
+        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, payload.encode('utf-8'))
+        finally:
+            os.close(fd)
+        return lock_path
+    except OSError as e:
+        log.warning('实例锁接管失败，跳过实例锁: %s', e)
+        return None
+
+
+def _release_instance_lock(lock_path):
+    """删实例锁；只删自己的（退出期间若已有新实例接管，不动它的锁）。"""
+    if not lock_path:
+        return
+    try:
+        old = json.loads(Path(lock_path).read_text(encoding='utf-8'))
+        if int(old.get('pid') or 0) != os.getpid():
+            return
+    except Exception:
+        return
+    try:
+        os.unlink(lock_path)
+    except OSError:
+        pass
+
 
 def serve(config: dict, host: str = None, port: int = None, config_path: str = None):
     app = AgentServer(config, config_path=config_path)
@@ -2699,23 +2904,41 @@ def serve(config: dict, host: str = None, port: int = None, config_path: str = N
     # WinError 10048 = 地址已被使用 / WinError 10013 = 权限拒绝（Hyper-V 端口保留）
     tried = []
     last_err = None
+    server = None
+    bound_port = None
     for p in range(bind_port, bind_port + 20):
         try:
             server = AgentHTTPServer((bind_host, p), Handler)
-            server.agent_server = app
-            app._httpd = server
-            app.start_exit_watchdog()
-            if p != bind_port:
-                print(f"[WARN] 端口 {bind_port} 被占用，已改用 {p}")
-            _print_banner(app, bind_host, p)
-            return server
+            bound_port = p
+            break
         except OSError as e:
             last_err = e
             tried.append(p)
             continue
-    raise RuntimeError(
-        f"端口 {bind_port}-{bind_port + 19} 全部不可用（最后一次错误：{last_err}）。"
-        f"请用 --port 指定其他端口，或关闭占用端口的程序。已尝试：{tried}")
+    if server is None:
+        raise RuntimeError(
+            f"端口 {bind_port}-{bind_port + 19} 全部不可用（最后一次错误：{last_err}）。"
+            f"请用 --port 指定其他端口，或关闭占用端口的程序。已尝试：{tried}")
+    # 0 代表系统分配临时端口：横幅与实例锁都要记实际端口，不是 0。
+    bound_port = server.server_address[1]
+    # 绑上端口后再拿实例锁：锁里记实际端口，探活才能找到这台；
+    # 若已有活实例，关掉刚绑的 server 再拒绝，不留第二个进程。
+    try:
+        app._instance_lock_path = _acquire_instance_lock(
+            app.ws.root, bind_host, bound_port)
+    except RuntimeError:
+        try:
+            server.server_close()
+        except Exception:
+            pass
+        raise
+    server.agent_server = app
+    app._httpd = server
+    app.start_exit_watchdog()
+    if bound_port != bind_port:
+        print(f"[WARN] 端口 {bind_port} 被占用，已改用 {bound_port}")
+    _print_banner(app, bind_host, bound_port)
+    return server
 
 
 def _print_banner(app, host: str, port: int):

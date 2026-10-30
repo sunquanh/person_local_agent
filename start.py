@@ -77,17 +77,15 @@ def line(ch='─', n=58):
 # ── 配置 ────────────────────────────────────────────────────────
 
 def read_config():
-    """读 config.json；不存在返回 None，读坏了返回 {}（交给 app.py 用默认值兜底）。"""
+    """读 config.json；不存在返回 None，读坏了抛错（不交给 app.py 用默认值兜底，
+    默认工作台目录可能不是用户的真实目录，静默兜底会在错误目录里读写）。"""
     if not os.path.isfile(CFG_PATH):
         return None
-    try:
-        with open(CFG_PATH, encoding='utf-8') as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception as e:
-        say('⚠️  config.json 解析失败：%s' % e)
-        say('    将按默认配置启动，稍后可在设置页修正。')
-        return {}
+    with open(CFG_PATH, encoding='utf-8') as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError('config.json 顶层必须是对象')
+    return data
 
 
 def _drive_missing(path):
@@ -230,7 +228,11 @@ def main():
     say('  %s · 一键启动' % TITLE)
     line('═')
 
-    cfg = read_config()
+    try:
+        cfg = read_config()
+    except ValueError as e:
+        say('❌ %s，启动已停止，请修复后重试。' % e)
+        return 1
     if cfg is None:
         if not bootstrap_config():
             return 1
@@ -250,7 +252,11 @@ def main():
     line()
 
     # 端口：命令行 > config.json > 8080
-    port_want = want_port or int(srv.get('port') or DEFAULT_PORT)
+    try:
+        port_want = want_port or int(srv.get('port') or DEFAULT_PORT)
+    except (TypeError, ValueError):
+        say('❌ config.json 里 server.port 不是合法端口，启动已停止，请修复后重试。')
+        return 1
     if not (1 <= port_want <= 65535):
         say('⚠️  端口 %d 不合法，改用 %d' % (port_want, DEFAULT_PORT))
         port_want = DEFAULT_PORT

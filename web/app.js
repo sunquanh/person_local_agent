@@ -4365,7 +4365,10 @@ function wbPageRegister() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: WB_PAGE_ID }),
   })
-    .then((r) => r.json())
+    .then((r) => {
+      if (!r.ok) throw new Error('register failed: ' + r.status);
+      return r.json();
+    })
     .then((d) => {
       if (!d || !d.auto_exit) return;   // 服务端关了这个功能，什么都不用做
       if (wbPageTimer) clearInterval(wbPageTimer);
@@ -4377,7 +4380,11 @@ function wbPageRegister() {
         }).catch(() => {});
       }, 5000);
     })
-    .catch(() => {});
+    .catch(() => {
+      // 登记失败（服务端刚重启/网络抖动）：5 秒后重试，否则心跳永不启动，
+      // 服务端收不到登记，自动退出 silently 失效。
+      if (!wbPageClosed) setTimeout(wbPageRegister, 5000);
+    });
 }
 
 function wbPageUnregister() {
