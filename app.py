@@ -23,12 +23,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 # 与 config.example.json 对齐：缺的键在这里补齐（值与代码既有默认值一致，
-# 改动前后行为不变）。注意不补 model.max_tokens：example 写 0 表示不限，
-# 但 validate_config 要求 max_tokens > 0，补 0 会导致每次启动都校验失败；
-# example 与校验器的这个口子需另行定夺（改 example 或改校验），不在本批动。
+# 改动前后行为不变）。model.max_tokens: 0 表示不限（llm.py 收到 0 时不发
+# max_tokens 参数、由服务端决定上限），校验器只拦负数；2026-10-30 按此
+# 口径修好，此前 example 写 0 但校验器要求 >0，照 example 配的机子启动即报错。
 DEFAULT_CONFIG = {
     "model": {"base_url": "http://127.0.0.1:8000/v1", "api_key": "", "name": "qwen",
-              "thinking": "collapse",
+              "thinking": "collapse", "max_tokens": 0,
               "context_window": 32768},
     "workspace": {"root": os.path.join(os.path.expanduser('~'), '我的工作台')},
     "server": {"host": "127.0.0.1", "port": 8080,
@@ -158,8 +158,8 @@ def validate_config(cfg: dict) -> dict:
             raise ValueError('配置 model.context_window 不能为负')
     if 'max_tokens' in model:
         model['max_tokens'] = _coerce_int(model['max_tokens'], 'model.max_tokens')
-        if model['max_tokens'] <= 0:
-            raise ValueError('配置 model.max_tokens 必须大于 0')
+        if model['max_tokens'] < 0:
+            raise ValueError('配置 model.max_tokens 不能为负数（0 表示不限）')
     if 'thinking' in model and not isinstance(model['thinking'], str):
         raise ValueError('配置 model.thinking 必须是字符串')
     ws = cfg.get('workspace') or {}
