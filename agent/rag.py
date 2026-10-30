@@ -16,6 +16,10 @@
     df（文档频率）在建索引时算好存表，检索时只算 query 侧 TF-IDF，
     避免每次提问都全量分词所有 chunk（旧版 4000 块约 1.7s/次）。
 """
+# 注解全部延迟求值：`str | Path` 这类 3.10+ 写法在 3.8/3.9 上也能导入
+# （与 README “Python 3.8+” 的宣称一致；全仓仅 rag.py 一处用到联合注解）。
+from __future__ import annotations
+
 import math
 import os
 import re

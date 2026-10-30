@@ -27,6 +27,19 @@ def _slug_title(title: str) -> str:
     return t or '新会话'
 
 
+# 会话 id 必须是 create() 生成的 12 位 hex：一切经外部传入的 sid 都要先过
+# 白名单，否则 '../..' 会拼出工作台根目录，delete() 的 rmtree 就能删掉
+# 任意目录（路径穿越）。所有取会话目录的入口都经 _sdir 统一校验。
+_SID_RE = re.compile(r'^[0-9a-f]{12}$')
+
+
+def _check_sid(sid) -> str:
+    s = str(sid or '')
+    if not _SID_RE.match(s):
+        raise ValueError(f'非法会话 id: {s!r}')
+    return s
+
+
 # 落盘瘦身：工具结果与思考过程只保留前 N 字符
 # （messages.json 会被频繁整体读写，20 条 12KB 的工具结果就能撑到几 MB）
 _TOOL_RESULT_KEEP = 600
@@ -108,7 +121,8 @@ class SessionManager:
         (self.data_dir / 'sessions').mkdir(parents=True, exist_ok=True)
 
     def _sdir(self, sid) -> Path:
-        return self.data_dir / 'sessions' / sid
+        # _check_sid 在这里统一拦：delete/load/_save 等所有入口都经 _sdir。
+        return self.data_dir / 'sessions' / _check_sid(sid)
 
     def _sfile(self, sid, name) -> Path:
         return self._sdir(sid) / name
@@ -123,6 +137,11 @@ class SessionManager:
         return s
 
     def load(self, sid: str) -> Session:
+        _check_sid(sid)
+        if not self._sdir(sid).is_dir():
+            # 不存在的 sid 直接抛错，不再返回“幽灵空会话”——否则调用方
+            # _save 后会在磁盘上凭空建出会话目录，聊天接口的 400 分支也永不触发。
+            raise FileNotFoundError(f'会话不存在: {sid}')
         s = Session(sid, '新会话', '')
         s.messages = self._read_json(sid, 'messages.json') or []
         s.artifacts = self._read_json(sid, 'artifacts.json') or []
@@ -145,6 +164,8 @@ class SessionManager:
         if not base.is_dir():
             return out
         for d in sorted(os.listdir(base), reverse=True):
+            if not _SID_RE.match(d):
+                continue  # 会话目录外的杂项（非 create() 生成的 id）不参与列表
             sdir = self._sdir(d)
             if not sdir.is_dir():
                 continue
@@ -236,6 +257,7 @@ class SessionManager:
 
     def delete(self, sid: str):
         import shutil
+        # sid 合法性由 _sdir 内的 _check_sid 保证：'../..' 之类到不了 rmtree。
         shutil.rmtree(self._sdir(sid), ignore_errors=True)
 
     # ── 会话操作 ─────────────────────────────────────────────────

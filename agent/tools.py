@@ -202,6 +202,12 @@ class ToolRegistry:
             return False
         if self.profile == 'trusted' or self.auto_approve.get('run_other_cmds'):
             return True
+        # shell 连接/重定向/替换元字符一律走人工确认：白名单判定只看“第一段
+        # 前缀”，而实际执行的是整条命令，`echo x > 盘外路径`、`dir && del 文件`、
+        # `cd . & del *` 都会借白名单前缀放行后半段。已记住的前缀也不例外
+        # （记忆只记首词，同样看不到后半段）。
+        if re.search(r'[&|;<>`$()\n\r]', c):
+            return False
         first = c.split()[0].lower()
         if first in self.session_allow:          # 本次运行已记住的前缀
             return True
@@ -312,6 +318,8 @@ class ToolRegistry:
                 items = sorted(os.listdir(p), key=lambda x: (not (p / x).is_dir(), x.lower()))
             except PermissionError:
                 raise PermissionError(f"无权限读取目录: {p}")
+            # 敏感文件连名字也不列出（与 resolve_read 的拦截口径一致）。
+            items = [x for x in items if not ws.is_sensitive(p / x)]
             for name in items[:200]:
                 fp = p / name
                 tag = '📁' if fp.is_dir() else '  '
@@ -320,7 +328,7 @@ class ToolRegistry:
                 except Exception:
                     size = 0
                 entries.append(f"{tag} {name}" + (f"  ({size}B)" if size else ""))
-            more = f"\n… 共 {len(os.listdir(p))} 项，仅显示前 200" if len(items) >= 200 else ""
+            more = f"\n… 共 {len(items)} 项，仅显示前 200" if len(items) >= 200 else ""
             return ToolResult(f"目录 {p}:\n" + "\n".join(entries) + more)
 
         def glob_search(a):
@@ -332,8 +340,12 @@ class ToolRegistry:
                 dirs[:] = [d for d in dirs if not d.startswith('.')
                            and d not in ('node_modules', '__pycache__')]
                 for f in files:
+                    full = os.path.join(root, f)
+                    # 敏感文件不进入结果（只返回路径名也是泄露存在性）。
+                    if ws.is_sensitive(full):
+                        continue
                     if re.search(pat, f, re.IGNORECASE):
-                        hits.append(os.path.join(root, f))
+                        hits.append(full)
                 if len(hits) >= 100:
                     break
             if not hits:
@@ -351,11 +363,16 @@ class ToolRegistry:
                 for f in files:
                     if f.endswith(('.pyc', '.db', '.png', '.jpg', '.xlsx', '.docx')):
                         continue
+                    full = os.path.join(root, f)
+                    # 敏感文件与符号链接一律不打开（与 resolve_read 的拦截口径一致）：
+                    # 否则一句 grep 就能读出任意目录 .env 里的 key。
+                    if ws.is_sensitive(full) or os.path.islink(full):
+                        continue
                     try:
-                        with open(os.path.join(root, f), encoding='utf-8', errors='replace') as fh:
+                        with open(full, encoding='utf-8', errors='replace') as fh:
                             for i, line in enumerate(fh, 1):
                                 if re.search(pat, line, re.IGNORECASE):
-                                    out.append(f"{os.path.join(root, f)}:{i}: {line.rstrip()[:150]}")
+                                    out.append(f"{full}:{i}: {line.rstrip()[:150]}")
                                     if len(out) >= 100:
                                         return ToolResult("\n".join(out))
                     except Exception:

@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 本地运行配置：含 API Key 密文 / MCP 密钥密文 / 访问令牌，只存本机，绝不入库
+# （模板见 config.example.json；config.json 一旦入库，历史里的密钥无法靠删文件洗掉）
+config.json

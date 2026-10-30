@@ -228,7 +228,11 @@ def _delete_attachment_ref(app, sid: str, ts: float, path: str):
 
     返回 None 表示成功，否则返回错误信息字符串。
     """
-    if not app.sessions._sdir(sid).is_dir():
+    try:
+        if not app.sessions._sdir(sid).is_dir():
+            return '会话不存在'
+    except ValueError:
+        # _sdir 校验 sid 失败（'../..' 之类）：同样按“不存在”处理，不抛 500。
         return '会话不存在'
     try:
         s = app.sessions.load(sid)
@@ -303,7 +307,8 @@ class AgentServer:
         # MCP 客户端（B5）：按 config.mcp.servers 拉起子进程（失败只影响对应 server）
         try:
             from agent.mcp import manager as _mcp
-            _mcp.configure((config.get('mcp') or {}).get('servers') or [])
+            _mcp.configure(self._servers_for_runtime(
+                (config.get('mcp') or {}).get('servers') or []))
         except Exception as e:
             log.warning('MCP 初始化失败（不影响启动）: %s', e)
 
@@ -359,6 +364,52 @@ class AgentServer:
                   f"密文依赖 ~/.local_agent_v2.key，换机器后需重新加密。")
             return ''
 
+    # ── MCP 环境变量：与 api_key 同一套 ENC: 机制 ─────────────────
+    # 磁盘 config 里只存 ENC: 密文；拉起子进程 / 返回设置页时才在内存里解密。
+    # 旧版明文 env 兼容：非 ENC: 值原样保留，下次在设置页保存时自动转密文。
+    @staticmethod
+    def _encrypt_mcp_env(env: dict) -> dict:
+        """落盘前加密。已是 ENC: 的值原样保留（防重复加密）；加密失败抛错，
+        调用方拒绝保存，绝不让明文密钥进 config.json。"""
+        from encrypt_key import encrypt_key
+        out = {}
+        for k, v in (env or {}).items():
+            s = str(v)
+            out[k] = s if s.startswith('ENC:') else 'ENC:' + encrypt_key(s)
+        return out
+
+    @staticmethod
+    def _decrypt_mcp_env(env: dict) -> dict:
+        """内存态解密（供拉起子进程用）。解密失败的值跳过并记日志，
+        不把密文当成密钥传给子进程。"""
+        out = {}
+        for k, v in (env or {}).items():
+            s = str(v)
+            if s.startswith('ENC:'):
+                try:
+                    from encrypt_key import decrypt_key
+                    s = decrypt_key(s)
+                except Exception as e:
+                    log.error('MCP 环境变量 %s 解密失败，已跳过: %s', k, e)
+                    continue
+            out[k] = s
+        return out
+
+    @classmethod
+    def _servers_for_runtime(cls, servers) -> list:
+        """交给 manager.configure 的 server 列表：env 已解密的新副本。
+
+        config 里存的是 ENC: 形态，manager 拿到密文会原样传给子进程当密钥，
+        所以 4 处 configure 调用点都要先过这一层；config 本身不动。
+        """
+        out = []
+        for s in (servers or []):
+            d = dict(s or {})
+            if d.get('env'):
+                d['env'] = cls._decrypt_mcp_env(d['env'])
+            out.append(d)
+        return out
+
     def _make_llm(self, model: str = None) -> LLMClient:
         m = self.config.get('model', {}) or {}
         limits = self.config.get('limits', {}) or {}
@@ -388,8 +439,10 @@ class AgentServer:
                 p.write_text(tok, encoding='utf-8')
         except OSError:
             tok = secrets.token_urlsafe(18)
-        srv['token'] = tok
-        self.config['server'] = srv
+        # 令牌只存内存 + .agent/access_token 文件，绝不写进 self.config：
+        # _persist 会把 config 全量 dump 到 config.json，而 config.json 可能
+        # 被提交进公开仓库，写进去等于公开令牌。固定令牌请直接写 access_token
+        # 文件（本函数优先读它），或由用户自行写进 config（自行承担保管责任）。
         return tok
 
     @property
@@ -574,9 +627,13 @@ class AgentServer:
                 else:
                     try:
                         from encrypt_key import encrypt_key
-                        m['api_key'] = 'ENC:' + encrypt_key(new_key)
-                    except Exception:
-                        m['api_key'] = new_key    # 加密不可用：退回明文，至少能用
+                        enc_key = 'ENC:' + encrypt_key(new_key)
+                    except Exception as e:
+                        # 加密失败绝不退回明文落盘：直接拒绝本次保存，磁盘上
+                        # 的旧密文保持不变（否则明文 key 会随 _persist 进 config.json）。
+                        log.error('API Key 加密失败，已拒绝保存: %s', e)
+                        raise ValueError('密钥加密失败（密钥文件不可写？），已拒绝保存，请检查后重试')
+                    m['api_key'] = enc_key
                     self._api_key_plain = new_key
             self.llm = self._make_llm()
             log.info('模型配置已更新: %s @ %s（key=%s）',
@@ -678,11 +735,17 @@ class AgentServer:
         }
         servers = [x for x in servers
                    if str(x.get('name') or '') not in (old_name, name)]
+        try:
+            # 环境变量只存 ENC: 密文（与 api_key 同机制）；加密失败拒绝保存。
+            rec['env'] = self._encrypt_mcp_env(env)
+        except Exception as e:
+            log.error('MCP 环境变量加密失败，已拒绝保存: %s', e)
+            raise ValueError('MCP 密钥加密失败（密钥文件不可写？），已拒绝保存，请检查后重试')
         servers.append(rec)
         mcfg['servers'] = servers
         self._persist()
         from agent.mcp import manager
-        manager.configure(servers)
+        manager.configure(self._servers_for_runtime(servers))
         log.info('MCP 配置已保存: %s -> %s %s', old_name or '(新增)', command,
                  ' '.join(args)[:120])
         return servers
@@ -700,7 +763,7 @@ class AgentServer:
         mcfg['servers'] = keep
         self._persist()
         from agent.mcp import manager
-        manager.configure(keep)
+        manager.configure(self._servers_for_runtime(keep))
         log.info('MCP 已删除: %s', name)
         return keep
 
@@ -719,7 +782,7 @@ class AgentServer:
         mcfg['servers'] = servers
         self._persist()
         from agent.mcp import manager
-        manager.configure(servers)
+        manager.configure(self._servers_for_runtime(servers))
         log.info('MCP 配置已更新: %s',
                  ', '.join(f"{s.get('name')}={'开' if s.get('enabled', True) else '关'}"
                            for s in servers) or '（空）')
@@ -1036,7 +1099,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"sessions": self.app.sessions.list_all()})
             if path == '/api/session':
                 sid = (qs.get('id') or [''])[0]
-                s = self.app.sessions.load(sid)
+                try:
+                    s = self.app.sessions.load(sid)
+                except (ValueError, FileNotFoundError):
+                    return self._err(404, '会话不存在')
                 return self._json({"session": {
                     "id": s.id, "title": s.title, "created_at": s.created_at,
                     "messages": s.messages,
@@ -1489,7 +1555,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if path == '/api/session/regenerate':
                 d = json.loads(self._read_body() or b'{}')
-                s = self.app.sessions.load(d['id'])
+                try:
+                    s = self.app.sessions.load(d['id'])
+                except (ValueError, FileNotFoundError):
+                    return self._err(404, '会话不存在')
                 while s.messages and s.messages[-1].get('role') == 'assistant':
                     s.messages.pop()
                 self.app.sessions._save(s)

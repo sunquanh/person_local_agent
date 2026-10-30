@@ -121,7 +121,7 @@ const md = window.markdownit ? window.markdownit({
     const badge = known ? `<span class="cp-lang">${esc(langName)}</span>` : '';
     const cpBtn = `<button class="cp-code" title="带格式复制代码">${ico('copy')} 复制</button>`;
     if (known) {
-      try { return `<pre><code class="hljs language-${langName}">` + hljs.highlight(str, { language: langName, ignoreIllegals: true }).value + `</code>${badge}${cpBtn}</pre>`; }
+      try { return `<pre><code class="hljs language-${esc(langName)}">` + hljs.highlight(str, { language: langName, ignoreIllegals: true }).value + `</code>${badge}${cpBtn}</pre>`; }
       catch (e) {}
     }
     if (window.hljs) {
