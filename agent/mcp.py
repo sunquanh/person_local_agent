@@ -320,8 +320,11 @@ class McpServer:
             return text
 
     def status_dict(self) -> dict:
+        # env 不再原样暴露：/api/settings 会把它发给前端。值统一替换为
+        # 脱敏占位符（与 server/httpd.py 的 _ENV_MASKED 同一字符串），
+        # 前端回传占位符时 save_mcp_server 保留原值，见该处逻辑。
         return {'name': self.name, 'command': self.command,
-                'args': self.args, 'env': dict(self.env),
+                'args': self.args, 'env': {k: '已设置（脱敏）' for k in self.env},
                 'enabled': self.enabled,
                 'status': self.status, 'error': self.error,
                 'timeout': self.timeout,

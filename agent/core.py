@@ -680,8 +680,13 @@ class Agent:
                 p = self.ws.root / rel
                 if not p.is_file():
                     continue
+                # 项目指令直接进 system prompt：文件本身或路径中任何一段是
+                # 符号链接时跳过（否则链接可指向工作台外任意文件，敏感内容
+                # 进上下文、恶意指令进系统提示词），与其它路径校验口径一致。
+                self.ws._reject_symlinks(p)
                 txt = p.read_text(encoding='utf-8', errors='replace').strip()
-            except OSError:
+            except (OSError, PermissionError) as e:
+                log.warning('项目指令 %s 未读入（%s）', rel, e)
                 continue
             if not txt:
                 continue

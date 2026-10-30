@@ -217,11 +217,23 @@ class Workspace:
 
     # ── 本轮快照（撤销）──────────────────────────────────────────
     def begin_turn(self, session_id: str, turn_id: str = None):
-        """开始一轮写入追踪（Agent.run 开头调用）。"""
+        """开始一轮写入追踪（Agent.run 开头调用）。
+
+        嵌套调用（子 Agent 委托，同一线程内 run 套 run）复用外层快照：
+        只记深度计数，不覆盖外层 snap——否则子 Agent 的 end_turn 会把外层
+        快照清掉，本轮写入丢失撤销记录；子 Agent 的写入一并记入外层 journal，
+        撤销时整轮回滚。
+        """
+        depth = getattr(self._tl, 'snap_depth', 0)
+        if depth > 0:
+            self._tl.snap_depth = depth + 1
+            snap = getattr(self._tl, 'snap', None)
+            return snap['turn'] if snap else None
         turn = turn_id or str(int(time.time() * 1000))
         d = (self.root / '.agent' / 'snapshots' / sanitize_slug(session_id, 'x') / turn)
         self._tl.snap = {'sid': session_id, 'turn': turn, 'dir': d,
                          'entries': [], 'seen': set()}
+        self._tl.snap_depth = 1
         return turn
 
     def _snap_record(self, real: Path, rel: str):
@@ -244,7 +256,18 @@ class Workspace:
             pass
 
     def end_turn(self):
-        """结束一轮：落 journal.json，返回可撤销信息（无写入则返回 None）。"""
+        """结束一轮：落 journal.json，返回可撤销信息（无写入则返回 None）。
+
+        嵌套层只减深度计数，不落 journal——外层 end_turn 才一次性落盘，
+        与 begin_turn 的复用语义配对；未 begin 就 end 时直接返回 None。
+        """
+        depth = getattr(self._tl, 'snap_depth', 0)
+        if depth <= 0:
+            return None
+        depth -= 1
+        self._tl.snap_depth = depth
+        if depth > 0:
+            return None
         snap = getattr(self._tl, 'snap', None)
         self._tl.snap = None
         if not snap or not snap['entries']:
@@ -283,8 +306,22 @@ class Workspace:
         return out
 
     def undo_turn(self, sid: str, turn: str) -> dict:
-        """回滚某一轮的所有写入：新增文件删除、覆盖文件还原。"""
-        d = self._snap_root(sid) / str(turn)
+        """回滚某一轮的所有写入：新增文件删除、覆盖文件还原。
+
+        turn 只接受 begin_turn 生成的纯数字时间戳：原样拼进快照路径再
+        rmtree，'../..' 之类能删掉快照目录外的任意目录。备份文件名同样
+        只认 journal 写出的 `<序号>.bak` 形态，防 journal 内容被改写后
+        读出盘外文件覆盖工作台文件。
+        """
+        t = str(turn or '')
+        if not re.fullmatch(r'[0-9]+', t):
+            raise ValueError(f'非法轮次 id: {turn!r}')
+        base = self._snap_root(sid).resolve()
+        d = (base / t).resolve()
+        try:
+            d.relative_to(base)
+        except ValueError:
+            raise ValueError(f'非法轮次 id: {turn!r}')
         j = d / 'journal.json'
         if not j.is_file():
             raise FileNotFoundError('该轮没有可撤销的记录')
@@ -300,7 +337,11 @@ class Workspace:
                 continue
             try:
                 if e.get('existed'):
-                    bak = d / str(e.get('backup') or '')
+                    bak_name = str(e.get('backup') or '')
+                    if not re.fullmatch(r'[0-9]+\.bak', bak_name):
+                        failed.append(rel)
+                        continue
+                    bak = d / bak_name
                     if bak.is_file():
                         real.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(bak, real)

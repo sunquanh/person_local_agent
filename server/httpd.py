@@ -7,11 +7,13 @@
 - 看门狗：chat 总时长超限强制 stop 并返回错误，避免 _busy 永久占用
 """
 import io
+import ipaddress
 import json
 import mimetypes
 import os
 import re
 import secrets
+import socket
 import hmac
 import subprocess
 import sys
@@ -56,6 +58,10 @@ def _split_cmd_args(s: str) -> list:
 
 
 WEB_DIR = Path(__file__).resolve().parent.parent / 'web'
+
+# 脱敏占位符：status_dict / _redacted_config 发给前端的密钥类值统一用它
+# 替换原文；前端回传该值时表示"未改动"，保存逻辑须保留旧值、不得加密存盘。
+_ENV_MASKED = '已设置（脱敏）'
 
 # 局域网访问的登录页（纯内联，无任何外部资源，离线可用）
 _LOGIN_HTML = """<!DOCTYPE html>
@@ -728,6 +734,17 @@ class AgentServer:
             raise ValueError(f'已存在同名 MCP 服务：{name}')
         old = next((x for x in servers
                     if str(x.get('name') or '') in (old_name, name)), {})
+        # 脱敏占位符回传 = 不改：status_dict 只给前端占位符，保存时收到占
+        # 位符就保留旧的 ENC: 密文；否则占位符会被当成真值加密存盘，覆盖
+        # 掉原来的密钥。旧配置里没有该 key 时占位符按空处理（丢弃）。
+        old_env = old.get('env') or {}
+        if isinstance(old_env, dict):
+            for k, v in list(env.items()):
+                if v == _ENV_MASKED:
+                    if k in old_env:
+                        env[k] = old_env[k]
+                    else:
+                        del env[k]
         rec = {
             'name': name, 'command': command, 'args': args, 'env': env,
             'enabled': bool(srv.get('enabled', old.get('enabled', True))),
@@ -812,7 +829,7 @@ class AgentServer:
         cfg = _copy.deepcopy(self.config or {})
         m = cfg.get('model')
         if isinstance(m, dict):
-            m['api_key'] = '已设置（脱敏）' if m.get('api_key') else ''
+            m['api_key'] = _ENV_MASKED if m.get('api_key') else ''
         srv = cfg.get('server')
         if isinstance(srv, dict):
             srv.pop('token', None)
@@ -820,7 +837,7 @@ class AgentServer:
         if isinstance(mcp, dict):
             for s in (mcp.get('servers') or []):
                 if isinstance(s, dict) and s.get('env'):
-                    s['env'] = {k: '已设置（脱敏）' for k in s['env']}
+                    s['env'] = {k: _ENV_MASKED for k in s['env']}
         sec = cfg.get('security')
         if isinstance(sec, dict) and 'session_allow' in sec:
             sec['session_allow'] = len(sec.get('session_allow') or [])
@@ -1288,7 +1305,13 @@ class Handler(BaseHTTPRequestHandler):
             self._err(500, f'{type(e).__name__}: {e}')
 
     def _static(self, name):
-        p = WEB_DIR / name
+        # 名字来自 URL（/vendor/../../config.json）：先 resolve 再校验落在
+        # WEB_DIR 内，否则 404；原样拼路径会越界读到项目内任意文件。
+        try:
+            p = (WEB_DIR / name).resolve()
+            p.relative_to(WEB_DIR.resolve())
+        except (ValueError, RuntimeError, OSError):
+            return self._err(404, 'not found')
         if not p.is_file():
             return self._err(404, 'not found')
         body = p.read_bytes()
@@ -2420,6 +2443,15 @@ class Handler(BaseHTTPRequestHandler):
         d = json.loads(self._read_body(limit=64 * 1024) or b'{}')
         if not d.get('base_url') or not d.get('model'):
             return self._err(400, '缺少 base_url 或 model')
+        # SSRF 纵深：base_url 完全取自请求体。本地/局域网模型地址是本功能的
+        # 正常用途（示例配置就是 127.0.0.1），回环与私网不拦，边界靠访问令牌；
+        # 但云元数据（169.254/16）与不可路由地址一律不许探。http.client 不跟
+        # 随重定向，解析到的 IP 即连接目标；DNS 在检查与连接之间变化的
+        # TOCTOU 残留已注明（要根治需在连接层校验，见 _check_probe_url）。
+        try:
+            self._check_probe_url(str(d['base_url']))
+        except ValueError as e:
+            return self._err(400, str(e))
         test = LLMClient(d['base_url'], d.get('api_key', ''), d['model'], timeout=30)
         t0 = time.monotonic()
         try:
@@ -2431,6 +2463,45 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": str(e)}, 502)
         except Exception as e:
             return self._json({"ok": False, "error": f'{type(e).__name__}: {e}'}, 502)
+
+    @staticmethod
+    def _check_probe_url(url: str):
+        """校验 _test_llm 的探测目标：只放行 http/https，且解析到的任一
+        地址不得是未指定/链路本地（含云元数据 169.254/16）/组播/保留段
+        或 0.0.0.0/8；解析失败直接拒绝（fail-closed）。
+
+        回环与私网地址有意放行：本地与局域网模型是本功能的正常用途，
+        其边界由访问令牌守。残留风险：DNS 在本检查与实际连接之间变化
+        （TOCTOU），根治需在连接层对解析结果校验，本轮未做。
+        """
+        u = urlparse(url)
+        if u.scheme not in ('http', 'https'):
+            raise ValueError('base_url 只允许 http/https')
+        host = (u.hostname or '').strip()
+        if not host:
+            raise ValueError('base_url 缺少主机名')
+        port = u.port or (443 if u.scheme == 'https' else 80)
+        try:
+            infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        except OSError as e:
+            raise ValueError(f'无法解析主机名 {host}（{e}）')
+        blocked = []
+        for _fam, _typ, _proto, _canon, sockaddr in infos:
+            try:
+                ip = ipaddress.ip_address(sockaddr[0])
+            except ValueError:
+                continue
+            # 回环先放行：CPython 里 ::1 的 is_reserved 为真（::/8 保留段），
+            # 若先判保留段会把 IPv6 回环误杀；回环本就是允许的本地模型地址。
+            if ip.is_loopback:
+                continue
+            if (ip.is_unspecified or ip.is_link_local or ip.is_multicast
+                    or ip.is_reserved
+                    or (isinstance(ip, ipaddress.IPv4Address)
+                        and ip in ipaddress.ip_network('0.0.0.0/8'))):
+                blocked.append(str(ip))
+        if blocked:
+            raise ValueError(f'base_url 解析到不可探测的地址：{", ".join(blocked)}')
 
     def _dir_listing(self, qs: dict) -> dict:
         """文件树（懒加载，一次一层）。root: ws=工作台 home=用户目录 drive=磁盘根。"""

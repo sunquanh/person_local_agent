@@ -3861,7 +3861,7 @@ function mcpFillForm(name) {
   if (en) en.checked = s ? !!s.enabled : true;
   state.mcpEditing = s ? s.name : null;
   const tip = $('#mcpFormTip');
-  if (tip) tip.textContent = s ? `正在编辑「${s.name}」（改名会替换旧项）` : '';
+  if (tip) tip.textContent = s ? `正在编辑「${s.name}」（改名会替换旧项；环境变量显示为脱敏值，不改则保留原值，删行即删除该变量）` : '';
   const save = $('#mcpSave');
   if (save) save.textContent = s ? '保存修改并重连' : '保存并连接';
   if (box && name) box.scrollIntoView({ block: 'nearest' });

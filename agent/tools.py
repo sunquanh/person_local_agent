@@ -859,7 +859,13 @@ class ToolRegistry:
             context = a.get('context', '')
             prompt = (f"任务: {task}\n") + (f"上下文: {context}\n" if context else "")
             try:
-                result = sub.run([], prompt, mode='craft', max_turns=8)
+                # 父级只读时子 Agent 必须同样只读：mode 写死 'craft' 会让子级
+                # 拿到完整工具表，suggest 档的写文件自动放行直接绕过只读承诺。
+                # _hooks 即父级 Agent（ToolRegistry 由它构造），_read_only 由当
+                # 前 _run_loop 在工具执行前算好；独立构造的 registry 取不到则默认 craft。
+                parent_ro = bool(getattr(getattr(self, '_hooks', None), '_read_only', False))
+                result = sub.run([], prompt, mode='ask' if parent_ro else 'craft',
+                                 max_turns=8)
                 resp = result.get('response', '') or ''
                 arts = result.get('artifacts', [])
                 return ToolResult(f"子任务结果:\n{resp}", artifacts=arts)

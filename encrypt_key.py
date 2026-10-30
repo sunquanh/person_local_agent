@@ -34,32 +34,72 @@ _IV_LEN = 16
 _TAG_LEN = 32
 
 
-def _master_key() -> bytes:
-    """返回机器级主密钥（32 字节）。env AGENT_KEY 优先，否则读/生成 ~/.local_agent_v2.key。
+def _key_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".local_agent_v2.key")
 
-    注意：两条路径必须统一为 sha256(落盘内容)，否则首次生成后跨进程解密必然不一致。
+
+def _read_key_file(path: str):
+    """读密钥文件原文：文件不存在返回 None；存在但读不出或为空则抛错。
+
+    存在≠可读时绝不返回 None——旧版把"读失败"与"文件不存在"混成同一
+    个 None，后续 O_TRUNC 覆写会把历史密文的唯一密钥永久销毁。
+    """
+    if not os.path.isfile(path):
+        return None
+    try:
+        raw = open(path, "rb").read().strip()
+    except OSError as e:
+        raise OSError(f"机器密钥文件无法读取: {path} ({e})")
+    if not raw:
+        raise OSError(f"机器密钥文件为空: {path}")
+    return raw
+
+
+def _master_key() -> bytes:
+    """返回机器级主密钥（32 字节）。env AGENT_KEY 优先，否则读/生成密钥文件。
+
+    两条路径统一为 sha256(原文) 派生：把文件原文设为 AGENT_KEY 时，
+    两台机器得到同一主密钥、能互相解密。
+
+    失败语义一律抛错、绝不静默降级：密钥文件存在但读不出时不覆写；
+    写失败时不生成临时密钥（否则本轮加密的密文下次谁也解不开）。
     """
     env = os.environ.get("AGENT_KEY", "").strip()
     if env:
         return hashlib.sha256(env.encode("utf-8")).digest()
-    path = os.path.join(os.path.expanduser("~"), ".local_agent_v2.key")
-    data = None
-    if os.path.isfile(path):
+    path = _key_path()
+    data = _read_key_file(path)
+    if data is not None:
+        return hashlib.sha256(data).digest()
+    # 文件不存在：独占创建（双进程同时创建时，后来者读先到者写好的文件）
+    data = base64.urlsafe_b64encode(os.urandom(32))
+    fd = None
+    try:
         try:
-            raw = open(path, "rb").read().strip()
-            if raw:
-                data = raw
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            data2 = _read_key_file(path)
+            if data2 is None:
+                raise OSError(f"机器密钥文件创建冲突且无法读取: {path}")
+            return hashlib.sha256(data2).digest()
+        except OSError as e:
+            raise OSError(f"机器密钥文件无法写入: {path} ({e})")
+        with os.fdopen(fd, "wb") as f:
+            fd = None
+            f.write(data)
+    except OSError:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        # 写失败只剩半截文件时删掉：否则下次会把半截内容当成密钥，
+        # 与本次失败前加密的密文（无）对不上，反而制造"能加密不能解密"。
+        try:
+            os.unlink(path)
         except OSError:
             pass
-    if data is None:
-        # 首次使用：生成新密钥并落盘（权限 600 尽量防止他用户读取）
-        data = base64.urlsafe_b64encode(os.urandom(32))
-        try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-        except OSError:
-            pass  # 密钥文件写不了就用进程内随机密钥（每次启动变化，仅本次会话可用）
+        raise
     return hashlib.sha256(data).digest()
 
 
@@ -116,16 +156,33 @@ def _cli():
         return
     cmd = sys.argv[1]
     if cmd == "genkey":
-        import base64 as _b64
-        k = _b64.urlsafe_b64encode(_master_key())
-        print(f"机器密钥(HMAC-SHA256 派生源): {k.decode()}")
-        print(f"密钥文件: {os.path.join(os.path.expanduser('~'), '.local_agent_v2.key')}")
-        print("提示: 可用环境变量 AGENT_KEY 覆盖（export AGENT_KEY=xxx）")
+        # 打印密钥文件原文：把它设为 AGENT_KEY 可在别处得到同一主密钥。
+        # 旧版打印的是 sha256(原文) 的派生值，填回 AGENT_KEY 会得到另
+        # 一个主密钥、旧密文解不开——误导性输出，已修正。
+        # AGENT_KEY 已设置时生效密钥由它派生，文件内容不是当前密钥：
+        # 只提示备份环境变量本身，不回显。
+        if os.environ.get("AGENT_KEY", "").strip():
+            print("当前 AGENT_KEY 环境变量已设置，生效的主密钥由它派生。")
+            print("提示: 备份该环境变量的值即可在别处解密同一批密文；不要发到聊天记录/仓库。")
+            return
+        _master_key()  # 确保密钥文件存在（不存在则新建）
+        try:
+            content = open(_key_path(), "rb").read().strip().decode("ascii")
+        except OSError as e:
+            print(f"❌ 无法读取密钥文件: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"机器密钥: {content}")
+        print(f"密钥文件: {_key_path()}")
+        print("提示: 在别的机器上把该值设为环境变量 AGENT_KEY，可解密同一批密文；请离线保存，不要发到聊天记录/仓库。")
     elif cmd == "encrypt":
         if len(sys.argv) < 3:
             print("用法: python encrypt_key.py encrypt \"你的key\"")
             return
-        print(PREFIX + encrypt_key(sys.argv[2]))
+        try:
+            print(PREFIX + encrypt_key(sys.argv[2]))
+        except OSError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
     elif cmd == "decrypt":
         if len(sys.argv) < 3:
             print("用法: python encrypt_key.py decrypt \"ENC:...\"")
@@ -133,6 +190,9 @@ def _cli():
         try:
             print(decrypt_key(sys.argv[2]))
         except ValueError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        except OSError as e:
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(1)
     else:
