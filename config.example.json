@@ -1,0 +1,31 @@
+{
+  "model": {
+    "base_url": "http://127.0.0.1:8000/v1",
+    "api_key": "",
+    "name": "qwen",
+    "thinking": "collapse",
+    "max_tokens": 0,
+    "context_window": 32768
+  },
+  "workspace": {
+    "root": "D:\\我的工作台"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "auto_exit": true,
+    "auto_exit_grace_s": 5
+  },
+  "limits": {
+    "max_upload_mb": 50,
+    "chat_timeout_s": 600,
+    "llm_timeout_s": 300
+  },
+  "memory": {
+    "extract": true
+  },
+  "prompt": {
+    "role": "",
+    "rules": []
+  }
+}

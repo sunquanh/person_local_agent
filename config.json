@@ -1,0 +1,18 @@
+{
+  "model": {
+    "base_url": "https://api.longcat.chat/openai/v1",
+    "api_key": "****",
+    "name": "LongCat-2.0"
+  },
+  "workspace": {
+    "root": "C:\\Users\\User\\Documents\\我的工作台"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+  "limits": {
+    "max_upload_mb": 50,
+    "chat_timeout_s": 600
+  }
+}
