@@ -4,6 +4,75 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>加菲猫的工作室</title>
+<script>
+/* 前端自查：放在所有外部脚本之前，才能赶上“脚本根本加载不下来”。
+   页面能打开却什么都点不动，几乎都是脚本没跑：浏览器太旧（IE / 兼容模式，
+   现代语法直接 SyntaxError），或 .js 被服务端当成 text/plain 发出而被 nosniff
+   拦下。这里既在页面上弹提示，也回传 /api/client-log 落盘到
+   .agent/logs/app.log —— 离线机带不回来控制台，日志是唯一证据。 */
+(function () {
+  var sent = 0;
+  function post(kind, message, extra) {
+    if (sent >= 8) return;
+    sent++;
+    try {
+      fetch('/api/client-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({
+          kind: kind, message: String(message || ''),
+          url: location.href, ua: navigator.userAgent
+        }, extra || {}))
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  window.__wbReport = post;
+  function show(msg, detail) {
+    if (document.getElementById('bootFail')) return;
+    var d = document.createElement('div');
+    d.id = 'bootFail';
+    d.style.cssText = 'position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:99999;' +
+      'max-width:min(640px,92vw);background:#fff5f6;color:#8a1c26;border:1px solid #e7a9af;' +
+      'border-radius:12px;padding:14px 18px;font:13px/1.7 -apple-system,"Microsoft YaHei",sans-serif;' +
+      'box-shadow:0 10px 30px rgba(120,20,30,.18)';
+    d.innerHTML = '<b>' + msg + '</b>' +
+      (detail ? '<div style="margin-top:8px;font-size:12px;color:#a1494f">' + detail + '</div>' : '');
+    (document.body || document.documentElement).appendChild(d);
+  }
+  // 脚本加载失败（404 / MIME 被拦 / 网络中断）：点名是哪个文件
+  window.addEventListener('error', function (e) {
+    var t = e.target || {};
+    if (t.tagName === 'SCRIPT') {
+      show('前端脚本没能加载：' + String(t.src || '').split('/').pop(),
+        '按钮点不动就是因为这个。详细原因已写入日志：工作台目录下 .agent/logs/app.log。');
+      post('script-load', 'script failed: ' + (t.src || ''));
+      return;
+    }
+    if (e.message) {
+      show('页面脚本报错，部分功能可能不可用：' + e.message,
+        '详细堆栈已写入 .agent/logs/app.log。');
+      post('js-error', e.message, { source: e.filename, line: e.lineno, col: e.colno,
+        extra: e.error && e.error.stack ? String(e.error.stack).slice(0, 1500) : '' });
+    }
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason || {};
+    post('promise', (r && r.message) || String(r));
+  });
+  // 脚本都执行过还是没有启动标记：多半是前半段脚本没跑/报错了
+  setTimeout(function () {
+    if (window.__wbBooted) return;
+    show('页面脚本没有运行起来，所以所有按钮都点不动。',
+      '请先用新版 Chrome / Edge（非 IE、非“兼容模式”）打开本页；' +
+      '失败原因已写入 .agent/logs/app.log，把它发回来就能定位。');
+    post('boot-failed', '__wbBooted 未置位（脚本未执行或报错）', {
+      source: '',
+      extra: 'scripts=' + [].map.call(document.querySelectorAll('script[src]'),
+        function (s) { return String(s.src).split('/').pop(); }).join(',')
+    });
+  }, 2500);
+})();
+</script>
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/vendor/github.min.css" id="hlLight">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hlDark" disabled>
@@ -12,17 +81,17 @@
 </head>
 <body>
 <div id="app">
-  <div id="netBanner" class="hidden">⚠️ 与本地服务断开，正在重连…</div>
+  <div id="netBanner" class="hidden"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 2.4 17.9a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17.01h.01"/></svg> 与本地服务断开，正在重连…</div>
   <aside id="sidebar">
     <div class="sb-head">
       <div class="logo"><span class="logo-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5.2 8.4 3.5 3.6 9.2 5.7C10.2 5 11.1 4.6 12 4.6s1.8.4 2.8 1.1l5.7-2.1-1.7 4.8c2 1.5 3.2 3.6 3.2 5.9 0 4.3-3.6 7.1-10 7.1S2 18.6 2 14.3c0-2.3 1.2-4.4 3.2-5.9Z" fill="#ffffff"/><circle cx="9" cy="12.6" r="1.4" fill="#1b1e2e"/><circle cx="15" cy="12.6" r="1.4" fill="#1b1e2e"/><path d="M11 15.4h2l-1 1.5Z" fill="#1b1e2e"/><path d="M12 16.9c-.3.9-1 1.3-1.8 1.1M12 16.9c.3.9 1 1.3 1.8 1.1" fill="none" stroke="#1b1e2e" stroke-width=".9" stroke-linecap="round"/></svg></span><span class="logo-txt">加菲猫的工作室</span></div>
-      <button id="btnNew" class="btn primary block">＋ 新会话</button>
+      <button id="btnNew" class="btn primary block"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> 新会话</button>
       <div class="sb-search">
         <span class="sb-search-ic">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
         </span>
         <input id="sbSearch" type="text" aria-label="搜索会话" placeholder="搜索会话…（回车在全部内容中检索）" autocomplete="off" spellcheck="false">
-        <button id="sbSearchClear" class="sb-search-x hidden" title="清除" aria-label="清除搜索">✕</button>
+        <button id="sbSearchClear" class="sb-search-x hidden" title="清除" aria-label="清除搜索"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
       </div>
     </div>
     <div class="sb-label" id="sbLabel">最近会话</div>
@@ -52,9 +121,6 @@
       </div>
       <div class="ch-actions" id="chActions">
       <div class="ch-cluster">
-      <select id="modelSel" class="btn ghost small" title="临时切换模型（仅本会话生效，用于对比/降级）">
-        <option value="">模型：默认</option>
-      </select>
       <div class="ctx-wrap" id="ctxWrap">
         <button id="ctxMeter" class="hidden" aria-haspopup="true" aria-expanded="false"
           title="本轮发送给模型的上下文占用（点击可压缩历史）">
@@ -73,8 +139,11 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>导出
       </button>
       </div>
+      <button id="btnPanel" class="btn ghost small" title="显示/隐藏检查器（Ctrl+J）" aria-expanded="true" aria-label="检查器">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
+      </button>
       <div class="ch-more">
-        <button id="btnMore" class="btn ghost small" title="更多操作" aria-haspopup="true" aria-expanded="false" aria-label="更多操作">⋯</button>
+        <button id="btnMore" class="btn ghost small" title="更多操作" aria-haspopup="true" aria-expanded="false" aria-label="更多操作"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
         <div id="moreMenu" class="more-menu hidden" role="menu" aria-label="更多操作"><button id="btnTheme" class="btn" title="切换深/浅色主题（设置里也能改）" aria-label="切换深浅主题"></button></div>
       </div>
     </header>
@@ -85,11 +154,16 @@
       <button id="selCancel" class="btn small ghost">取消</button>
     </div>
     <div id="messages" role="log" aria-label="对话内容"></div>
-    <button id="jumpBottom" class="hidden" title="回到底部" aria-label="回到底部">↓</button>
+    <button id="jumpBottom" class="hidden" title="回到底部" aria-label="回到底部"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></button>
     <div id="welcome" class="hidden">
       <div class="w-logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5.2 8.4 3.5 3.6 9.2 5.7C10.2 5 11.1 4.6 12 4.6s1.8.4 2.8 1.1l5.7-2.1-1.7 4.8c2 1.5 3.2 3.6 3.2 5.9 0 4.3-3.6 7.1-10 7.1S2 18.6 2 14.3c0-2.3 1.2-4.4 3.2-5.9Z" fill="#ffffff"/><circle cx="9" cy="12.6" r="1.4" fill="#1b1e2e"/><circle cx="15" cy="12.6" r="1.4" fill="#1b1e2e"/><path d="M11 15.4h2l-1 1.5Z" fill="#1b1e2e"/><path d="M12 16.9c-.3.9-1 1.3-1.8 1.1M12 16.9c.3.9 1 1.3 1.8 1.1" fill="none" stroke="#1b1e2e" stroke-width=".9" stroke-linecap="round"/></svg></div>
       <h2>有什么可以帮你？</h2>
       <p>本地运行 · 数据不出本机 · 支持文件分析与产出</p>
+      <div id="modelCard" class="model-card hidden">
+        <b>还没连上模型服务</b>
+        <span id="modelCardMsg" class="muted"></span>
+        <button id="modelCardBtn" class="btn primary small">去设置里填地址并测试</button>
+      </div>
       <div id="wStats" class="w-stats"></div>
       <div class="w-chips" id="wChips">
         <button class="w-chip" data-q="写一份本周工作总结"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg> 写一份本周工作总结<small>按会话记录整理成周报</small></button>
@@ -98,13 +172,17 @@
       </div>
     </div>
 
-    <div id="queueBar" class="hidden"><span id="queueText"></span><button id="btnCancelQueue" class="btn ghost small">✕ 取消排队</button></div>
-    <div id="runBanner" class="hidden">⏳ 上一轮仍在后台运行，完成后自动刷新本会话</div>
+    <div id="queueBar" class="hidden"><span id="queueText"></span><button id="btnCancelQueue" class="btn ghost small"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg> 取消排队</button></div>
+    <div id="runBanner" class="hidden">上一轮仍在后台运行，完成后自动刷新本会话</div>
 
     <footer id="inputBar">
       <div id="slashMenu" class="hidden"></div>
       <div id="attachStrip" class="attach-strip hidden"></div>
       <div class="input-row">
+        <select id="modelSel" class="model-inline" title="临时切换模型（仅本会话生效，用于对比/降级）">
+          <option value="">默认模型</option>
+        </select>
+
         <button id="btnUpload" class="btn ghost" title="上传文件到 inputs/" aria-label="上传文件到 inputs">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
@@ -122,31 +200,33 @@
     </footer>
   </main>
 
+  <div id="panelMask"></div>
   <div class="resizer" id="rzRight" title="拖动调整宽度，双击复位"></div>
   <aside id="rightPanel">
     <div id="rpEmpty" class="rp-empty hidden">
-      <div class="rp-empty-ic">◫</div>
-      <p>这里显示本轮的 <b>任务清单</b>、<b>工具调用</b> 与 <b>产出物</b>。</p>
-      <p class="muted">跑一个任务后自动出现；Ctrl+J 可收起右栏。</p>
+      <div class="rp-empty-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18M3 9h12"/></svg></div>
+      <p>跑一个任务后，这里会出现</p>
+      <p class="rp-empty-list"><b>任务清单</b><i>·</i><b>工具调用</b><i>·</i><b>产出物</b></p>
+      <p class="rp-empty-tip">Ctrl+J 可收起右栏</p>
     </div>
-    <div id="rpTabs" class="hidden">
-      <button data-tab="todo"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg> 任务<span class="rp-n" id="rpTodoN"></span></button>
-      <button data-tab="tool"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> 工具<span class="rp-n" id="rpToolN"></span></button>
-      <button data-tab="art"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg> 产物<span class="rp-n" id="rpArtN"></span></button>
+    <div id="rpTabs" class="hidden" role="tablist" aria-label="检查器">
+      <button data-tab="todo" role="tab" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg> 任务<span class="rp-n" id="rpTodoN"></span></button>
+      <button data-tab="tool" role="tab" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> 工具<span class="rp-n" id="rpToolN"></span></button>
+      <button data-tab="art" role="tab" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg> 产物<span class="rp-n" id="rpArtN"></span></button>
     </div>
-    <section id="todoPanel" class="hidden">
+    <section id="todoPanel" class="hidden" role="tabpanel" aria-label="任务清单">
       <div class="rp-title"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg> 任务清单 <span id="todoProgress" class="muted"></span></div>
       <div id="todoList" class="todo-list"></div>
     </section>
 
-    <section id="toolPanel" class="hidden">
+    <section id="toolPanel" class="hidden" role="tabpanel" aria-label="工具调用">
       <details id="sessionTools" class="tools-block session-tools" open>
         <summary><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> 工具调用（0）</summary>
         <div class="msg-tools"></div>
       </details>
     </section>
 
-    <section id="artifactPanel" class="hidden">
+    <section id="artifactPanel" class="hidden" role="tabpanel" aria-label="产出物">
       <div class="ap-head"><span class="ap-title"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg> 本会话产出物</span>
         <span class="ap-ops">
           <button id="btnZipArts" class="btn ghost small" title="打包本会话全部产出物为 zip 下载"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg> 打包下载</button>
@@ -159,7 +239,7 @@
 
 <div id="modalMask" class="hidden"></div>
 <div id="modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-  <div class="modal-head"><span id="modalTitle"></span><button id="modalClose" class="btn ghost small" aria-label="关闭">✕</button></div>
+  <div class="modal-head"><span id="modalTitle"></span><button id="modalClose" class="btn ghost small" aria-label="关闭"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
   <div id="modalBody"></div>
 </div>
 

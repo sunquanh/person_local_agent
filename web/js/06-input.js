@@ -5,7 +5,7 @@ function showAskCard(botEl, f) {
   const card = document.createElement('div');
   card.className = 'ask-card';
   const opts = (f.options || []).slice(0, 6);
-  card.innerHTML = `<div class="ask-q">❓ ${esc(f.question || '')}</div>` +
+  card.innerHTML = `<div class="ask-q">${ico('ask')} ${esc(f.question || '')}</div>` +
     (opts.length ? `<div class="ask-opts">${opts.map((o) =>
       `<button class="btn small ask-opt">${esc(o)}</button>`).join('')}</div>` : '') +
     `<div class="ask-custom"><input type="text" placeholder="或直接输入你的回答…">` +
@@ -36,8 +36,8 @@ function showAskCard(botEl, f) {
     } catch (e) {}
     card.classList.add('done');
     card.innerHTML = skipped
-      ? '<div class="ask-done">⏭ 已跳过，AI 将按最合理的假设继续</div>'
-      : `<div class="ask-done">✅ 你的回答：${esc(answer || '')}</div>`;
+      ? `<div class="ask-done">${ico('skip')} 已跳过，AI 将按最合理的假设继续</div>`
+      : `<div class="ask-done">${ico('check')} 你的回答：${esc(answer || '')}</div>`;
     followScroll($('#messages'));
   }
   card.querySelectorAll('.ask-opt').forEach((b) => {
@@ -120,7 +120,7 @@ async function openPreview(rel, name) {
       const r = await fetch('/api/open-file?path=' + encodeURIComponent(rel));
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || '打开失败');
-      toast('🖥 已用系统程序打开');
+      toast('已用系统程序打开');
     } catch (e) { toast('打开失败：' + e.message, true); }
   };
   // 历史版本：切换预览 / 下载 / 恢复
@@ -199,7 +199,7 @@ async function openPreview(rel, name) {
           });
           const jd = await r.json();
           if (!r.ok) throw new Error(jd.error || '恢复失败');
-          toast('✅ 已恢复到 ' + fmtVerTs(ts));
+          toast('已恢复到 ' + fmtVerTs(ts));
           openPreview(rel, name);   // 重新加载（当前预览 + 版本列表）
         } catch (e) { toast('恢复失败：' + e.message, true); }
       }, '恢复');
@@ -402,7 +402,7 @@ const inp = $('#input');
 const SLASH = [
   { cmd: '/记忆', label: '打开记忆库', icon: 'db', run: () => $('#btnMemory').click() },
   { cmd: '/搜索', label: '搜索全部会话内容', icon: 'search', run: () => openSearchModal('') },
-  { cmd: '/新会话', label: '新建会话', icon: '＋', run: () => $('#btnNew').click() },
+  { cmd: '/新会话', label: '新建会话', icon: 'plus', run: () => $('#btnNew').click() },
   { cmd: '/上传', label: '上传文件到 inputs', icon: 'paperclip', run: () => $('#btnUpload').click() },
   { cmd: '/导出', label: '导出当前会话', icon: 'upload', run: () => $('#btnExport').click() },
   { cmd: '/导出网页', label: '导出为网页 HTML（双击可看）', icon: 'globe', run: () => exportHtml() },
@@ -510,7 +510,7 @@ async function uploadFiles(files) {
         state.attachments.push({ name: d.name, path: d.path, size: d.size });
         renderAttachStrip();
       }
-      $('#uploadHint').textContent = `✅ 已上传 ${f.name} → ${d.path}`;
+      $('#uploadHint').innerHTML = ico('check') + ` 已上传 ${esc(f.name)} → ${esc(d.path)}`;
     } catch (err) {
       $('#uploadHint').textContent = '';
       toast('上传失败：' + err.message, true);
@@ -571,7 +571,7 @@ function renderAttachStrip() {
     const x = document.createElement('button');
     x.className = 'x';
     x.title = '移除附件';
-    x.textContent = '✕';
+    x.innerHTML = ico('x');
     x.onclick = () => {
       state.attachments = state.attachments.filter((b) => b.path !== a.path);
       renderAttachStrip();
@@ -585,10 +585,14 @@ renderAttachStrip();
 
 /* ── 产出物面板（右侧）────────────────────────────────────── */
 function renderArtifacts(arts, show) {
-  // 只要有产物就展开面板（刷新/切换会话后不再"变空"——旧版只在流式 result 帧才展开）
+  // 只要有产物就展开面板（刷新/切换会话后不再"变空"——旧版只在流式 result 帧才展开）；
+  // 切到没产物的会话时要收起，否则面板留着上一轮的空白框（Tab 也错报“有产物”）
   if (arts && arts.length) {
     $('#artifactPanel').classList.remove('hidden');
     state.artShown = true;
+  } else if (!show) {
+    $('#artifactPanel').classList.add('hidden');
+    state.artShown = false;
   }
   const list = $('#artifactList');
   if (!list) return;

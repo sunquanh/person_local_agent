@@ -33,6 +33,7 @@ const state = {
   sessionGen: 0,      // 会话切换世代戳：旧请求的回包不许覆盖新会话
   busy: false,
   artShown: false,
+  runningSids: new Set(),  // 正在跑的会话（/api/jobs 轮询回填，侧栏显示圆点）
   pendingConfirm: null,
   treeRoot: 'ws',      // 文件树当前根：ws|home|drive
   treeRootPath: '',
@@ -64,6 +65,11 @@ const ICONS = {
   refresh: '<path d="M20.5 12a8.5 8.5 0 1 1-2.5-6"/><path d="M21 3v6h-6"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-4"/>',
   pin: '<path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/>',
+  warn: '<path d="M10.3 3.9 2.4 17.9a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17.01h.01"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8.01h.01"/>',
+  circle: '<circle cx="12" cy="12" r="7.5" stroke-dasharray="2 3.4"/>',
+  ask: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.7 2.2c-.8.5-1.3 1.1-1.3 2"/><path d="M12 17.01h.01"/>',
+  skip: '<path d="M5 4.5 14 12l-9 7.5z"/><path d="M18.5 5v14"/>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
   box: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
@@ -85,6 +91,8 @@ const ICONS = {
   up: '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
   panels: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  dots: '<circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.7" fill="currentColor" stroke="none"/>',
   log: '<path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M10 8h4M10 12h4M10 16h2"/>',
   type: '<path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/>',
   paperclip: '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
@@ -147,7 +155,14 @@ function isComposingKey(e) {
    函数声明会提升，后者全局生效，留两份只会误导。 */
 function toast(msg, isErr) {
   const t = $('#toast');
-  t.textContent = msg;
+  // 统一「图标 + 文案」：各调用点残留的 emoji 前缀（✅ / ❌ / ⚠ / 🌙 …）在这里
+  // 一次性剥掉，免得每处各写各的、深浅色下 emoji 风格还不一致。
+  const txt = String(msg == null ? '' : msg)
+    .replace(/^[\s\u2190-\u27BF\u2B00-\u2BFF\uFE0F\u200D]+/, '')
+    .replace(/^[\uD800-\uDBFF][\uDC00-\uDFFF]\uFE0F?\s*/, '')
+    .replace(/^[\s\uFE0F]+/, '');
+  t.innerHTML = ico(isErr ? 'warn' : 'check') + '<span></span>';
+  t.querySelector('span').textContent = txt;
   t.className = isErr ? 'err' : '';
   t.classList.remove('hidden');
   clearTimeout(t._h);
@@ -193,7 +208,8 @@ function syncThemeBtn() {
     b.setAttribute('aria-label', b.title);
   }
   const s = $('#stTheme');
-  if (s) s.textContent = dark ? '🌙 深色' : '☀️ 浅色';
+  if (s) s.innerHTML = ico(dark ? 'moon' : 'sun') +
+    '<span>' + (dark ? '深色' : '浅色') + '</span>';
 }
 /* 主题入口：顶栏用量条那一行一键切；设置页 / 命令面板共用同一函数 */
 function toggleTheme() {
@@ -201,6 +217,6 @@ function toggleTheme() {
   localStorage.setItem('theme', cur);
   applyTheme();
   syncThemeBtn();
-  toast(cur === 'dark' ? '🌙 已切到深色' : '☀️ 已切到浅色');
+  toast(cur === 'dark' ? '已切到深色' : '已切到浅色');
 }
 

@@ -472,7 +472,8 @@ async function batchCreate() {
 
 function batchItemsHtml(j) {
   const items = j.items || [];
-  const stIco = { done: '✅', failed: '❌', running: '⏳', pending: '○', canceled: '⏹' };
+  const stIco = { done: ico('check'), failed: ico('x'), running: ico('clock'),
+                   pending: ico('circle'), canceled: ico('stop') };
   return items.map((it) => {
     const arts = (it.artifacts || []).filter(Boolean).map((rel) =>
       `<a href="/api/file?path=${encodeURIComponent(rel)}" target="_blank">${esc(rel.split('/').pop())}</a>`).join(' ');

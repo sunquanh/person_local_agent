@@ -73,23 +73,30 @@ function renderSessions() {
     const el = document.createElement('div');
     el.className = 'sess' + (s.id === state.cur ? ' active' : '') + (s.pinned ? ' pinned' : '');
     // 最后活跃时间：按最近活跃排序 + 展示，替代创建时间
-    const timeTag = lastEpoch(s) ? `🕐 ${tsLabel(lastEpoch(s))} · ` : '';
-    const meta = timeTag + `${s.msg_count || 0} 条消息` + (s.artifact_count ? ` · ${s.artifact_count} 个产出` : '');
-    // 失败工具角标：红色胶囊，会话有问题时一眼可见；同时加 ⚠ 徽标在标题后
+    // 元信息用图标 + 文字（图标由 .t-meta 统一尺寸/对齐，深浅色一致）
+    const timeTag = lastEpoch(s)
+      ? `${ico('clock')}<span>${tsLabel(lastEpoch(s))}</span><span class="sep">·</span>` : '';
+    const meta = timeTag + `<span>${s.msg_count || 0} 条消息</span>`
+      + (s.artifact_count
+        ? `<span class="sep">·</span><span>${s.artifact_count} 个产出</span>` : '');
+    // 失败工具角标：红色胶囊 + 标题前同色小图标，会话有问题时一眼可见
     const failBadge = s.fail_count
-      ? ` · <span class="fail-badge" title="${s.fail_count} 次工具调用失败">${s.fail_count} 失败</span>` : '';
-    const warnMark = s.fail_count ? '<span class="warn-mark" title="有工具调用失败">⚠</span>' : '';
+      ? `<span class="sep">·</span><span class="fail-badge" title="${s.fail_count} 次工具调用失败">${s.fail_count} 失败</span>` : '';
+    const warnMark = s.fail_count
+      ? `<span class="warn-mark" title="有工具调用失败">${ico('warn')}</span>` : '';
     const pinMark = s.pinned ? `<span class="pin-mark" title="已置顶">${ico('pin')}</span>` : '';
+    const runDot = (state.runningSids && state.runningSids.has(s.id))
+      ? '<span class="run-dot" title="正在运行"></span>' : '';
     const preview = s.preview ? `<span class="t-prev">${esc(s.preview)}</span>` : '';
     el.innerHTML = `<span class="t" title="${esc(s.title)}">
-        <span class="t-main">${pinMark}${warnMark}${esc(s.title)}</span>
-        <span class="t-meta">${esc(meta)}${failBadge}</span>
+        <span class="t-main">${pinMark}${warnMark}${runDot}${esc(s.title)}</span>
+        <span class="t-meta">${meta}${failBadge}</span>
         ${preview}
       </span>
       <span class="ops">
         <button class="x pin${s.pinned ? ' on' : ''}" data-act="pin" title="${s.pinned ? '取消置顶' : '置顶会话'}">${ico('pin')}</button>
         <button class="x" data-act="ren" title="重命名">${ico('edit')}</button>
-        <button class="x" data-act="del" title="删除">✕</button>
+        <button class="x" data-act="del" title="删除">${ico('x')}</button>
       </span>`;
     el.querySelector('.t').onclick = () => selectSession(s.id);
     el.querySelector('.x[data-act="pin"]').onclick = (e) => {
@@ -134,6 +141,10 @@ $('#sbSearchClear').onclick = () => {
 
 $('#btnNew').onclick = async () => {
   if (state.busy) return toast('任务进行中，请先停止', true);
+  // 已经站在一个空会话里：再点只是“回到输入框”，不再造第二个空壳
+  // （否则连点几次侧栏会堆一排「新会话 · 0 条消息」）
+  const cur = state.sessions.find((s) => s.id === state.cur);
+  if (cur && !cur.msg_count && !cur.artifact_count) { $('#input').focus(); return; }
   const r = await fetch('/api/session/new', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
@@ -291,7 +302,7 @@ async function togglePin(id, pinned) {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error);
-    toast(pinned ? '📌 已置顶' : '已取消置顶');
+    toast(pinned ? '已置顶' : '已取消置顶');
     await loadSessions();
   } catch (e) {
     toast('置顶失败：' + e.message, true);

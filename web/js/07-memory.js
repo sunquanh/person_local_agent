@@ -41,7 +41,7 @@ function renderMemory() {
         <option value="new" ${st.sort === 'new' ? 'selected' : ''}>最新在前</option>
         <option value="old" ${st.sort === 'old' ? 'selected' : ''}>最旧在前</option>
       </select>
-      <button class="btn small" id="mfAdd">＋ 添加记忆</button>
+      <button class="btn small" id="mfAdd">${ico('plus')} 添加记忆</button>
     </div>
     <div id="mfAddForm" class="hidden">
       <textarea id="mfNewText" rows="2" placeholder="要记住的内容…"></textarea>
@@ -63,13 +63,13 @@ function renderMemory() {
     const cls = f.important ? ' starred' : '';
     const time = (f.created_at || '').slice(0, 16).replace('T', ' ');
     const tagsHtml = (f.tags || []).map((t) =>
-      `<span class="tag">#${esc(t)} <b class="x" data-tag="${esc(t)}">✕</b></span>`
+      `<span class="tag">#${esc(t)} <b class="x" data-tag="${esc(t)}">${ico('x')}</b></span>`
     ).join('');
     html += `<div class="mem-item${cls}" data-id="${f.id}">
       <button class="star" title="${f.important ? '取消重要' : '标记重要'}">${imp}</button>
       <div class="mem-main">
         <span class="ct" title="点击编辑">${esc(f.content)}</span>
-        <div class="mem-tags">${tagsHtml}<span class="tag-add" title="加标签">＋标签</span></div>
+        <div class="mem-tags">${tagsHtml}<span class="tag-add" title="加标签">${ico('plus')}标签</span></div>
         <span class="src">${esc(f.source || 'manual')} · ${time} · 召回 ${f.access_count || 0} 次</span>
       </div>
       <button class="edit" title="编辑">${ico('edit')}</button>
@@ -371,7 +371,7 @@ $('#btnSettings').onclick = async () => {
 
     <h4>常用 Prompt 模板（输入框打 /模板名 一键填入）</h4>
     <div id="stTplList"></div>
-    <div class="btns"><button class="btn small" id="stTplAdd">＋ 添加模板</button>
+    <div class="btns"><button class="btn small" id="stTplAdd">${ico('plus')} 添加模板</button>
       <button class="btn small" id="stTplSave">${ico('save')} 保存模板</button></div>
 
     <h4>角色与铁律（自定义提示词，注入每轮系统提示词）</h4>
@@ -408,7 +408,7 @@ $('#btnSettings').onclick = async () => {
     <label>根目录（inputs / outputs / notes / .agent 都在它下面；改完需重启工作台生效）
       <input type="text" id="stWsRoot" value="${esc((d.workspace || {}).root || '')}"></label>
     <div class="muted" id="stWsHint">${(d.workspace || {}).restart_required
-      ? '⚠ 已保存新路径，重启工作台后生效' : ''}</div>
+      ? ico('warn') + ' 已保存新路径，重启工作台后生效' : ''}</div>
 
     <h4>运行参数</h4>
     <label>历史压缩阈值（字符，会话历史超过后自动压缩，0=关闭）
@@ -423,7 +423,7 @@ $('#btnSettings').onclick = async () => {
     <h4>外观</h4>
     <div class="tree-toolbar">
       <span class="muted">主题</span>
-      <button class="btn small" id="stTheme">${document.documentElement.getAttribute('data-theme') === 'dark' ? '🌙 深色' : '☀️ 浅色'}</button>
+      <button class="btn small" id="stTheme">${document.documentElement.getAttribute('data-theme') === 'dark' ? ico('moon') + ' 深色' : ico('sun') + ' 浅色'}</button>
       <span class="muted">点一下在深/浅色间切换（立即生效，记在本机）</span>
     </div>
     <details class="logs-box"><summary>${ico('log')} 查看最近日志</summary>
@@ -463,7 +463,7 @@ $('#btnSettings').onclick = async () => {
     <h4>MCP 服务（stdio 子进程）</h4>
     <div id="mcpList" class="mcp-list"><div class="muted">加载中…</div></div>
     <details class="mcp-add" id="mcpAddBox">
-      <summary>＋ 添加 / 编辑 MCP 服务</summary>
+      <summary>${ico('plus')} 添加 / 编辑 MCP 服务</summary>
       <div class="mcp-form">
         <div class="mcp-tpls">
           <span class="muted">一键模板：</span>
@@ -512,8 +512,8 @@ $('#btnSettings').onclick = async () => {
   fetch('/api/rag/stats').then((r) => r.json()).then((s) => {
     const info = $('#stRagInfo');
     if (!info) return;
-    info.textContent = s.pending
-      ? `⚠ 索引已过期 ${s.pending} 个文件（重建后生效）`
+    info.innerHTML = s.pending
+      ? ico('warn') + ` 索引已过期 ${s.pending} 个文件（重建后生效）`
       : (s.chunks ? `已索引 ${s.docs} 个文件 / ${s.chunks} 块` : '尚无索引');
   }).catch(() => {});
   const modelHost = $('#stModelHost');
@@ -529,7 +529,7 @@ $('#btnSettings').onclick = async () => {
     } catch (e) { if (raw) hostLabel = '地址格式待检查'; }
     if (modelHost) {
       modelHost.classList.toggle('local', local);
-      modelHost.innerHTML = `${local ? '● 内网 / 本机地址' : '● 非典型内网地址'}：<b>${esc(hostLabel)}</b>` +
+      modelHost.innerHTML = `<span class="live-dot"></span>${local ? '内网 / 本机地址' : '非典型内网地址'}：<b>${esc(hostLabel)}</b>` +
         (local ? '。此模式适合断网运行（确认模型服务已预加载）。'
           : '。离线断网时不可达；请填写模型主机的局域网 IP 与端口。');
     }
@@ -590,7 +590,7 @@ $('#btnSettings').onclick = async () => {
     const labels = { 'python-docx': 'Word', openpyxl: 'Excel', 'python-pptx': 'PPT', pypdf: 'PDF', Pillow: '图片' };
     const deps = hd.deps || {};
     $('#stDeps').innerHTML = '依赖：' + Object.keys(labels).map((k) =>
-      `${esc(labels[k])} ${deps[k] ? '✅' : '⚠️'}`).join(' · ');
+      `${esc(labels[k])} ${deps[k] ? ico('check') : ico('warn')}`).join(' · ');
   }).catch(() => {});
   const logBox = document.querySelector('.logs-box');
   if (logBox) logBox.ontoggle = async () => {
@@ -618,9 +618,9 @@ $('#btnSettings').onclick = async () => {
       });
       const pd = await r.json();
       if (!r.ok) throw new Error(pd.error || '保存失败');
-      info.textContent = `✅ 已保存（${pd.chars} 字符，下一轮生效）`;
+      info.innerHTML = ico('check') + ` 已保存（${pd.chars} 字符，下一轮生效）`;
     } catch (e) {
-      info.textContent = '❌ ' + e.message;
+      info.innerHTML = ico('warn') + ' ' + esc(e.message);
     }
   };
 
@@ -632,9 +632,9 @@ $('#btnSettings').onclick = async () => {
       body: JSON.stringify({ base_url: $('#stUrl').value.trim(),
         model: $('#stModel').value.trim(), api_key: $('#stKey').value.trim() }) });
     const t = await r.json();
-    out.textContent = t.ok
-      ? `✅ 连接成功（${t.elapsed_s}s）：${t.content}`
-      : '❌ ' + (t.error || '测试失败');
+    out.innerHTML = t.ok
+      ? ico('check') + ` 连接成功（${t.elapsed_s}s）：${esc(t.content || '')}`
+      : ico('warn') + ' ' + esc(t.error || '测试失败');
   };
   state.wsRoot = (d.workspace || {}).root || '';
   renderMcpList(d.mcp || []);
@@ -675,11 +675,11 @@ $('#btnSettings').onclick = async () => {
     if (!r.ok) return toast(d.error || '保存失败', true);
     const wsr = d.workspace || {};
     if (wsr.restart_required) {
-      toast('⚠ 设置已保存；工作台目录需重启后生效', true);
+      toast('设置已保存；工作台目录需重启后生效', true);
       const hint = $('#stWsHint');
-      if (hint) hint.textContent = '⚠ 已保存新路径，重启工作台后生效';
+      if (hint) hint.innerHTML = ico('warn') + ' 已保存新路径，重启工作台后生效';
     } else {
-      toast('✅ 设置已保存并生效');
+      toast('设置已保存并生效');
     }
     $('#stKey').value = '';
     $('#stTestOut').textContent = '';
@@ -689,7 +689,7 @@ $('#btnSettings').onclick = async () => {
     info.textContent = '重建中…';
     const r = await fetch('/api/rag/index');
     const d = await r.json();
-    info.textContent = `✅ ${d.docs} 个文件 / ${d.chunks} 块（新增 ${d.new}，更新 ${d.updated}，移除 ${d.removed}）`;
+    info.innerHTML = ico('check') + ` ${d.docs} 个文件 / ${d.chunks} 块（新增 ${d.new}，更新 ${d.updated}，移除 ${d.removed}）`;
   };
   // 常用模板
   let tpls = [];
@@ -735,7 +735,7 @@ $('#btnSettings').onclick = async () => {
   const jobs = (jd.jobs || []).slice(0, 5);
   $('#stJobs').innerHTML = '<b>最近任务</b>' + (jd.queue ? `<span class="tag">排队中 ${jd.queue}</span>` : '') +
     (jobs.length ? '<ul>' + jobs.map((j) =>
-      `<li>${esc(j.done_at || '')} ${j.ok ? '✅' : '❌'} ${esc(j.message || '').slice(0, 40)}（${j.elapsed_s || 0}s）</li>`
+      `<li>${esc(j.done_at || '')} ${j.ok ? ico('check') : ico('warn')} ${esc(j.message || '').slice(0, 40)}（${j.elapsed_s || 0}s）</li>`
     ).join('') + '</ul>' : '<div>（暂无）</div>');
   openModal();
 };

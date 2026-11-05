@@ -355,7 +355,18 @@ class BatchRunner:
             f"3. 最后用一两句话给出结论。"
         )
         try:
-            r = agent.run([], prompt, mode='craft')
+            # 模型槽位：批量让位于交互对话（gate 按优先级排队），
+            # 不再像旧版那样与前台请求抢同一个推理槽。
+            gate_ok = self.app.gate.acquire('batch', timeout=3600,
+                                            stop=lambda: agent.stop_requested()
+                                            or job.get('status') == 'canceled')
+            if not gate_ok:
+                r = {'stopped': True, 'response': '', 'artifacts': []}
+            else:
+                try:
+                    r = agent.run([], prompt, mode='craft')
+                finally:
+                    self.app.gate.release()
         finally:
             with self._lock:
                 self._cur_agent = None

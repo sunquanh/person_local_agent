@@ -23,6 +23,32 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+# 前端资源的 MIME 写死在这里，不走 mimetypes 的系统猜测：Windows 上
+# HKCR\.js\Content Type 可能被别的软件改成 text/plain（装完 Visual Studio
+# 就是这样，CPython bpo-43975），而响应带了 X-Content-Type-Options: nosniff，
+# 浏览器就会拒绝执行脚本 —— 表现是页面正常显示、所有按钮都点不动。
+# 换机器部署时这个差异跟 config.json 无关，所以不能依赖注册表。
+_WEB_CTYPES = {
+    '.html': 'text/html', '.htm': 'text/html',
+    '.css': 'text/css',
+    '.js': 'text/javascript', '.mjs': 'text/javascript',
+    '.json': 'application/json', '.map': 'application/json',
+    '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+    '.ico': 'image/x-icon', '.bmp': 'image/bmp',
+    '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+    '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv',
+    '.wasm': 'application/wasm',
+}
+
+
+def _web_ctype(name: str) -> str:
+    """web/ 下静态资源的 Content-Type：先查写死的表，查不到才问系统。"""
+    ext = os.path.splitext(str(name))[1].lower()
+    return _WEB_CTYPES.get(ext) or mimetypes.guess_type(str(name))[0] \
+        or 'application/octet-stream'
+
+
 from agent import logsetup
 from agent.core import Agent, compact_history, estimate_messages
 from agent.events import TURN_EVENTS
@@ -30,9 +56,27 @@ from agent.llm import LLMClient, LLMError
 from agent.memory import Memory
 from agent.workspace import Workspace
 from server.batch import BatchRunner, valid_job_id
+from server.runs import ModelGate, RunRegistry
 from server.sessions import SessionManager
 
 log = logsetup.get('http')
+
+
+def _local_hostnames() -> set:
+    """本机可接受的 Host 名（localhost / 计算机名 / FQDN）。"""
+    names = {'localhost', 'localhost.localdomain'}
+    for fn in (socket.gethostname, socket.getfqdn):
+        try:
+            n = str(fn() or '').strip().lower()
+        except Exception:
+            continue
+        if n:
+            names.add(n)
+            names.add(n.split('.')[0])
+    return names
+
+
+_LOCAL_HOSTNAMES = _local_hostnames()
 
 
 def _split_cmd_args(s: str) -> list:
@@ -304,9 +348,15 @@ class AgentServer:
         self.agent_role = str(pr.get('role') or '').strip()
         self.agent_rules = [str(r).strip() for r in (pr.get('rules') or [])
                             if str(r).strip()]
+        # 模型推理槽位（交互 > 批量 > 记忆）：单卡部署默认 1 槽，可在 limits.model_slots 调；
+        # 必须在 Memory/RAG 之前建，记忆提取线程要用同一个 gate。
+        self.gate = ModelGate(int(limits.get('model_slots', 1) or 1))
+        self.runs = RunRegistry()        # 按会话登记运行状态（/api/run、侧栏状态）
+        self._extract_scheduled = threading.Event()
         from agent.rag import Rag
         self.rag = Rag(w.get('root', '') or str(self.ws.root))
-        self.memory = Memory(str(self.ws.root / '.agent' / 'memory.db'))
+        self.memory = Memory(str(self.ws.root / '.agent' / 'memory.db'),
+                             gate=self.gate)
         self.sessions = SessionManager(str(self.ws.root / '.agent'))
         self.batch = BatchRunner(self)   # 批量作业（B8）：单 worker 串行执行
         # MCP 客户端（B5）：按 config.mcp.servers 拉起子进程（失败只影响对应 server）
@@ -346,6 +396,9 @@ class AgentServer:
             self.auto_exit_grace_s = max(1.0, float(srv.get('auto_exit_grace_s', 5)))
         except (TypeError, ValueError):
             self.auto_exit_grace_s = 5.0
+        # 登录尝试限速：ip -> [失败时间戳]（仅失败计数，令牌正确不受影响）
+        self._auth_fails = {}
+        self._auth_fail_lock = threading.Lock()
         self._pages = {}            # page_id -> 最后一次心跳时间
         self._pages_seen = False    # 出现过页面才启用，纯 API/CLI 用法不受影响
         self._pages_empty_at = 0.0
@@ -614,7 +667,24 @@ class AgentServer:
             return False
         if self.memory.extracting() or self.batch.running():
             return False
-        self.memory.extract_summary(self.llm, sid, full.title, full.messages)
+        if self._extract_scheduled.is_set():
+            return False
+        self._extract_scheduled.set()
+        # 延后到空闲：一轮刚结束就抢槽，用户紧接着打第二句时正好撞上。
+        delay = float((self.config.get('memory') or {}).get('idle_s', 15) or 0)
+        title, messages = full.title, list(full.messages)
+
+        def _later():
+            try:
+                if delay > 0:
+                    time.sleep(delay)
+                if self._busy or self.batch.running() or self.memory.extracting():
+                    return
+                self.memory.extract_summary(self.llm, sid, title, messages)
+            finally:
+                self._extract_scheduled.clear()
+
+        threading.Thread(target=_later, name='mem-extract-wait', daemon=True).start()
         return True
 
     # ── 配置保存/热切换 ─────────────────────────────────────────
@@ -920,6 +990,22 @@ class AgentServer:
             raise
 
     # ── 产物元信息 ───────────────────────────────────────────────
+    # ── 登录限速（共享令牌没有账号可锁，只能按 IP 限流）──────────
+    def note_auth_failure(self, ip: str, limit: int = 10, window: float = 60.0) -> bool:
+        """记一次认证失败，返回是否已超限（超限则本次直接 429）。"""
+        if not ip:
+            return False
+        now = time.time()
+        with self._auth_fail_lock:
+            arr = [t for t in self._auth_fails.get(ip, []) if now - t < window]
+            arr.append(now)
+            self._auth_fails[ip] = arr
+            # 防止长期运行下 IP 表无限增长
+            if len(self._auth_fails) > 512:
+                self._auth_fails = {k: v for k, v in self._auth_fails.items()
+                                    if v and now - v[-1] < window}
+            return len(arr) > limit
+
     def _artifact_metas(self, rels):
         out = []
         for r in rels:
@@ -970,6 +1056,47 @@ class Handler(BaseHTTPRequestHandler):
         if length > limit:
             raise ValueError('body too large')
         return self.rfile.read(length)
+
+    # 前端报错去重计数 (kind, message) -> 次数；只在本进程内，重启归零
+    _client_log_seen = {}
+
+    def _client_log(self):
+        """接收页面内联脚本回传的前端报错，写进 .agent/logs/app.log。
+
+        为什么需要它：页面能打开但按钮全死时，真正的原因（脚本被当成
+        text/plain 拦下 / 浏览器太旧报 SyntaxError）只在浏览器控制台里，
+        而离线电脑往往没法把控制台带回来。这里给它一条写到磁盘的通道。
+        同一条消息最多记 5 次，防止死循环刷满日志。
+        """
+        try:
+            d = json.loads(self._read_body(limit=64 * 1024) or b'{}')
+            if not isinstance(d, dict):
+                raise ValueError('not an object')
+        except Exception:
+            return self._err(400, '请求体必须是 JSON 对象')
+        kind = str(d.get('kind') or 'js')[:24]
+        msg = str(d.get('message') or '')[:1200]
+        if not msg:
+            msg = '(空消息)'
+        if len(self._client_log_seen) > 200:
+            self._client_log_seen.clear()
+        key = (kind, msg)
+        n = self._client_log_seen.get(key, 0) + 1
+        self._client_log_seen[key] = n
+        keep = n <= 5
+        if keep:
+            lg = logsetup.get('web')
+            where = ''
+            if d.get('source'):
+                where = f" @ {str(d['source'])[:200]}:{d.get('line') or '?'}"
+            lg.warning('前端报错 [%s] %s%s', kind, msg, where)
+            ua = str(d.get('ua') or self.headers.get('User-Agent') or '')[:300]
+            lg.warning('  浏览器: %s | 页面: %s', ua, str(d.get('url') or '')[:200])
+            if d.get('extra'):
+                lg.warning('  附加: %s', str(d['extra'])[:800])
+            elif n > 1:
+                lg.warning('  （同类报错第 %d 次）', n)
+        return self._json({"ok": True, "logged": keep, "count": n})
 
     def _is_loopback(self) -> bool:
         """请求是否来自本机（127.0.0.1）。
@@ -1092,6 +1219,29 @@ class Handler(BaseHTTPRequestHandler):
                 return True
         return False
 
+    def _host_allowed(self) -> bool:
+        """Host 头必须是本机名或 IP 字面量（防 DNS 重绑定）。
+
+        只监听回环时，恶意页面可以把 evil.com 解析到 127.0.0.1，浏览器会把它
+        当成同源，从而绕过同源策略直接调接口读数据。正常的本机/局域网访问
+        带的是 127.0.0.1 / localhost / 机器名 / 局域网 IP，公网域名一律拒绝。
+        """
+        raw = (self.headers.get('Host') or '').strip().lower()
+        if not raw:
+            return False
+        try:
+            host = (urlparse('//' + raw).hostname or '').strip('[]')
+        except Exception:
+            return False
+        if not host:
+            return False
+        try:
+            ipaddress.ip_address(host)
+            return True          # IP 字面量：回环与局域网直连
+        except ValueError:
+            pass
+        return host in _LOCAL_HOSTNAMES or host.endswith('.local')
+
     def _same_origin_request(self, require_header: bool = False) -> bool:
         """验证浏览器写请求的来源。
 
@@ -1100,6 +1250,10 @@ class Handler(BaseHTTPRequestHandler):
         no-referrer 的恶意页面仅凭自动带的 cookie 就能跨站改配置。
         """
         source = self.headers.get('Origin') or self.headers.get('Referer')
+        # 现代浏览器对跨站请求会带 Sec-Fetch-Site: cross-site；有它就直接拒，
+        # 不必再猜来源头（覆盖表单提交等不带 Origin 的老路径）。
+        if (self.headers.get('Sec-Fetch-Site') or '').strip().lower() == 'cross-site':
+            return False
         if not source:
             return not require_header
         try:
@@ -1112,20 +1266,38 @@ class Handler(BaseHTTPRequestHandler):
     def _mutation_allowed(self) -> bool:
         """写请求是否放行（CSRF 门禁）。
 
-        - 回环无令牌模式：本机单用户，沿用现有行为。
+        - 回环无令牌模式：浏览器带来的 Origin 必须同源（仍允许无来源头的
+          CLI/脚本）。否则用户随便打开一个网页，对方一个 no-cors POST 就能
+          改安全档位、注册 MCP 命令（= 在本机执行任意命令），用户无需点击。
         - Bearer / ?t= 认证：调用方显式给令牌，浏览器不会自动带，
           不受跨站影响，直接放行（CLI/脚本走 ?t= 不受影响）。
         - cookie 认证：必须严格同源（来源头齐全且匹配），无来源头拒绝。
         """
         if not self.app.access_token:
-            return True
+            return self._same_origin_request(require_header=False)
         if getattr(self, '_auth_via', '') in ('bearer', 'query'):
             return True
         return self._same_origin_request(require_header=True)
 
     def _auth_fail(self):
-        """未认证：页面请求给登录页，API 请求给 401 JSON。"""
+        """未认证：页面请求给登录页，API 请求给 401 JSON。
+
+        令牌是共享门禁，没有账号体系可锁，所以对暴力尝试做窗口限速：
+        同一 IP 每分钟超过 10 次失败后返回 429，避免局域网内无限猜。
+        """
         path = urlparse(self.path).path
+        ip = self._client_ip()
+        too_many = self.app.note_auth_failure(ip)
+        if too_many:
+            self.send_response(429)
+            self.send_header('Retry-After', '60')
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            body = json.dumps({"error": '尝试过于频繁，请 1 分钟后再试',
+                               "retry_after": 60}, ensure_ascii=False).encode('utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path.startswith('/api/'):
             return self._json({"error": '需要访问令牌', "auth_required": True}, 401)
         body = _LOGIN_HTML.encode('utf-8')
@@ -1135,11 +1307,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _client_ip(self) -> str:
+        try:
+            return str((self.client_address or ('', 0))[0])
+        except Exception:
+            return ''
+
     # ── GET ──────────────────────────────────────────────────────
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path
         qs = parse_qs(u.query)
+        # Host 必须是本机名/IP（防 DNS 重绑定把 evil.com 当成同源）
+        if not self._host_allowed():
+            return self._err(403, '未知的 Host，拒绝访问')
         # /api/health 免认证：局域网内探活/排查用，不泄露任何数据
         authed = path == '/api/health' or self._auth_ok()
         if not authed:
@@ -1216,6 +1397,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/memory':
                 return self._json({"facts": self.app.memory.all_facts(),
                                    "prefs": self.app.memory.get_prefs()})
+            if path == '/api/model/status':
+                # 轻量连通性探测（只做 TCP 建连，不消耗模型推理），首屏引导用
+                return self._json(self._model_status())
             if path == '/api/health':
                 authed = self._auth_ok()
                 base = {
@@ -1282,7 +1466,22 @@ class Handler(BaseHTTPRequestHandler):
                                    "running_owner_is_me": bool(
                                        self.app._running_owner and cid
                                        and self.app._running_owner == cid),
-                                   "started_at": self.app._run_started})
+                                   "started_at": self.app._run_started,
+                                   "runs": self.app.runs.summary(),
+                                   "gate": self.app.gate.stats()})
+            if path == '/api/run':
+                # 单个会话的运行状态 + 事件回放（刷新/切会话后能看到进行到哪）
+                sid = (qs.get('sid') or [''])[0]
+                try:
+                    after = max(0, int((qs.get('after') or ['0'])[0] or 0))
+                except ValueError:
+                    after = 0
+                run = self.app.runs.for_session(sid)
+                if run is None:
+                    return self._json({"running": False, "run": None})
+                snap = run.snapshot(after)
+                snap['running'] = run.status == 'running'
+                return self._json(snap)
             if path == '/api/batch':
                 # 批量作业（B8）：带 id 返回单个台账（含逐项状态），否则返回列表
                 jid = (qs.get('id') or [''])[0]
@@ -1367,14 +1566,29 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(404, 'not found')
         if not p.is_file():
             return self._err(404, 'not found')
+        st = p.stat()
+        etag = f'"{int(st.st_mtime)}-{st.st_size}"'
+        # 304 复用：离线机每次刷新都把 vendor（markdown-it/highlight）重下一遍
+        # 没必要；ETag 校验只回一个空响应。HTML 仍然 no-store，保证升级立刻生效。
+        if self.headers.get('If-None-Match') == etag:
+            self.send_response(304)
+            self.send_header('ETag', etag)
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         body = p.read_bytes()
-        ctype = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+        ctype = _web_ctype(name)
         self.send_response(200)
         self.send_header('Content-Type', f'{ctype}; charset=utf-8')
-        # 禁用缓存：离线机升级后浏览器必须拿到最新 js/*.js、app.css，否则"改了个寂寞"
-        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-        self.send_header('Pragma', 'no-cache')
-        self.send_header('Expires', '0')
+        if ctype == 'text/html':
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            # 页面不许被别的站嵌入（防点击劫持：透明 iframe 盖住“确认执行”按钮）。
+            # 只加在页面响应上：产物预览的 iframe（/api/file）不受影响。
+            self.send_header('X-Frame-Options', 'SAMEORIGIN')
+        else:
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('ETag', etag)
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1606,11 +1820,16 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         path = u.path
         qs = parse_qs(u.query)
+        if not self._host_allowed():
+            return self._err(403, '未知的 Host，拒绝访问')
         if not self._auth_ok():
             return self._auth_fail()
         if not self._mutation_allowed():
             return self._err(403, '跨站请求已拒绝')
         try:
+            if path == '/api/client-log':
+                # 前端报错回传：离线机上看不到控制台，日志是唯一能带回来的证据
+                return self._client_log()
             if path == '/api/chat':
                 return self._handle_chat()
             if path == '/api/session/new':
@@ -1670,6 +1889,10 @@ class Handler(BaseHTTPRequestHandler):
                 d = json.loads(self._read_body() or b'{}')
                 pid = str(d.get('id') or '')[:64]
                 n = self.app.page_open(pid)
+                # 记下是哪个浏览器打开的：换机器的“按钮全点不动”里，
+                # 默认浏览器是 IE / 旧内核是高频原因，日志里得能看出来。
+                log.info('页面浏览器: %s',
+                         str(self.headers.get('User-Agent') or '')[:240])
                 return self._json({"ok": True, "pages": n,
                                    "auto_exit": self.app.auto_exit,
                                    "grace_s": self.app.auto_exit_grace_s})
@@ -2124,26 +2347,70 @@ class Handler(BaseHTTPRequestHandler):
             self._sse_started = True
 
             send_lock = threading.Lock()
+            run_ref = {'run': None}   # 本轮运行登记（定义在 send 前，供事件记录）
 
-            def send(kind, **data):
-                if kind not in TURN_EVENTS:
-                    # 开发期显眼提示；生产不因一个坏帧打死整轮对话
-                    log.error('未登记的 SSE 事件类型: %s', kind)
-                payload = json.dumps({"type": kind, **data}, ensure_ascii=False)
-                with send_lock:
-                    try:
-                        self.wfile.write(f"data: {payload}\n\n".encode('utf-8'))
-                        self.wfile.flush()
-                    except Exception:
-                        pass
+            # ── delta 合帧：25ms 或 4KB 再写一次 ────────────────────
+            # 逐 token write+flush 会让一段长回答产生几千次系统调用，前端也要
+            # 跟着醒几千次；合帧后帧数降一个数量级，打字机观感不变。
+            delta_buf = []
+            delta_lock = threading.Lock()
+            last_flush = [time.monotonic()]
+            delta_stop = threading.Event()
 
-            def raw_send(blob: bytes):
+            def _write_sse(blob: bytes):
                 with send_lock:
                     try:
                         self.wfile.write(blob)
                         self.wfile.flush()
                     except Exception:
                         pass
+
+            def _flush_deltas(force: bool = False):
+                with delta_lock:
+                    if not delta_buf:
+                        return
+                    if (not force and len(delta_buf) < 4000
+                            and (time.monotonic() - last_flush[0]) < 0.04):
+                        return
+                    text = ''.join(delta_buf)
+                    delta_buf.clear()
+                    last_flush[0] = time.monotonic()
+                if text:
+                    payload = json.dumps({"type": 'delta', "text": text}, ensure_ascii=False)
+                    _write_sse(f"data: {payload}\n\n".encode('utf-8'))
+
+            def _delta_pump():
+                while not delta_stop.wait(0.045):
+                    _flush_deltas(force=True)
+
+            threading.Thread(target=_delta_pump, name='sse-delta', daemon=True).start()
+            # finally 里可能拿不到局部变量（早失败）：挂到 self 上做兑底
+            self._flush_deltas = _flush_deltas
+            self._delta_stop = delta_stop
+
+            def send(kind, **data):
+                if kind not in TURN_EVENTS:
+                    # 开发期显眼提示；生产不因一个坏帧打死整轮对话
+                    log.error('未登记的 SSE 事件类型: %s', kind)
+                _run = run_ref.get('run')
+                if _run is not None:
+                    try:
+                        _run.add(kind, **data)
+                    except Exception:
+                        pass
+                if kind == 'delta':
+                    with delta_lock:
+                        delta_buf.append(data.get('text') or '')
+                    _flush_deltas()
+                    return
+                # 其它帧必须先把已缓冲的正文吐完，否则前端会看到“工具先到、正文后到”
+                _flush_deltas(force=True)
+                payload = json.dumps({"type": kind, **data}, ensure_ascii=False)
+                _write_sse(f"data: {payload}\n\n".encode('utf-8'))
+
+            def raw_send(blob: bytes):
+                _flush_deltas(force=True)
+                _write_sse(blob)
 
             # ── 排队：单任务串行，后到者先推 queued 帧再等待 ──────
             # 队列的 append/remove/队首判断全程持 _queue_lock：裸 list 操作
@@ -2186,6 +2453,8 @@ class Handler(BaseHTTPRequestHandler):
             app._running_sid = sid                  # 断流续看：供 /api/jobs 报告“仍在运行”
             app._running_owner = box.owner
             app._run_started = time.time()
+            run = app.runs.create(sid, box.owner, 'chat')
+            run_ref['run'] = run
             agent.reset_stop()
             agent.on_delta = lambda t: send('delta', text=t)
             agent.on_tool = lambda n, a, ok, r, arts, ms=None: send(
@@ -2197,6 +2466,18 @@ class Handler(BaseHTTPRequestHandler):
                 agent.on_think = lambda t: send('think', text=t)
             else:
                 agent.on_think = None
+
+            # 模型槽位：交互请求排在同一条队的最前面；批量/记忆提取在下面排队
+            got_gate = {'v': False}
+            if not app.gate.acquire('chat', timeout=max(30.0, app.chat_timeout_s),
+                                    stop=agent.stop_requested):
+                app.runs.finish(run, 'error')
+                app._running = None
+                app._running_sid = ''
+                app._running_owner = ''
+                send('error', message='模型正忙（其他任务占用推理槽），请稍后重试')
+                return
+            got_gate['v'] = True
 
             result_box = {}
             run_t0 = time.monotonic()
@@ -2212,8 +2493,13 @@ class Handler(BaseHTTPRequestHandler):
                     result_box['e'] = f'{type(e).__name__}: {e}'
                     log.exception('对话失败: %s', e)
                 finally:
-                    release_busy()
+                    if got_gate['v']:
+                        app.gate.release()
                     r = result_box.get('r')
+                    app.runs.finish(
+                        run, 'stopped' if (r or {}).get('stopped')
+                        else ('done' if 'r' in result_box else 'error'))
+                    release_busy()
                     app._jobs.insert(0, {
                         'message': message[:200],
                         'ok': 'r' in result_box,
@@ -2335,6 +2621,16 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._err(500, f'{type(e).__name__}: {e}')
         finally:
+            # 合帧线程收尾：先把最后一段正文写出去，再停 pump
+            try:
+                stop_ev = getattr(self, '_delta_stop', None)
+                if stop_ev is not None:
+                    stop_ev.set()
+                flush_fn = getattr(self, '_flush_deltas', None)
+                if flush_fn is not None:
+                    flush_fn(force=True)
+            except Exception:
+                pass
             release_busy()
             app._running = None
             app._running_sid = ''
@@ -2510,6 +2806,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(500, f'保存失败: {e}')
         log.info('项目指令已保存: %s（%d 字符）', rel, len(content))
         return self._json({"ok": True, "rel": rel, "chars": len(content)})
+
+    def _model_status(self):
+        """模型服务是否可建连：只探 TCP，不跑推理（离线场景下不抢卡）。"""
+        m = self.app.config.get('model', {}) or {}
+        url = str(m.get('base_url') or '')
+        info = {"base_url": url, "model": str(m.get('name') or ''),
+                "reachable": False, "error": ''}
+        if not url:
+            info['error'] = '未配置模型地址'
+            return info
+        try:
+            u = urlparse(url)
+            host = u.hostname
+            port = u.port or (443 if u.scheme == 'https' else 80)
+            if not host:
+                raise ValueError('地址不合法')
+            s = socket.create_connection((host, port), timeout=1.5)
+            s.close()
+            info['reachable'] = True
+        except Exception as e:
+            info['error'] = f'{type(e).__name__}: {e}'
+        return info
 
     def _test_llm(self):
         d = json.loads(self._read_body(limit=64 * 1024) or b'{}')
@@ -2738,9 +3056,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
                 for dirpath, _dirs, files in os.walk(root):
+                    # 备份包自己的临时 zip 就在 .agent/tmp：不跳过的话每次备份
+                    # 都会把自己（还没写完的）打进去，包越备份越胖。
+                    if os.path.relpath(dirpath, root).replace('\\', '/') == '.agent/tmp':
+                        continue
                     for name in files:
                         fp = os.path.join(dirpath, name)
                         rel = os.path.relpath(fp, root).replace('\\', '/')
+                        # 备份包会被拷给别人/传到群里：访问令牌、实例锁绝不进包
+                        if rel in ('.agent/access_token', '.agent/server.lock'):
+                            continue
                         try:
                             z.write(fp, rel)
                         except Exception:

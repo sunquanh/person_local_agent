@@ -12,6 +12,7 @@ import os
 import re
 import sqlite3
 import threading
+from contextlib import contextmanager
 import time
 from datetime import datetime
 
@@ -42,9 +43,11 @@ def _split_words(text: str):
 
 
 class Memory:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, gate=None):
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self.db = db_path
+        # 模型槽位（可选）：记忆提取让位于交互对话，不再与前台抢卡
+        self._gate = gate
         # 提取中标记：离线单卡/单槽模型下，一次提取会占着推理槽，
         # 上一次没跑完就不要再排新的（否则前后台抢同一个槽，用户侧明显变慢）
         self._extracting = threading.Event()
@@ -54,10 +57,20 @@ class Memory:
         """是否已有一次记忆提取在进行中。"""
         return self._extracting.is_set()
 
+    @contextmanager
     def _conn(self):
+        """每次操作一个短连接，用完就关（旧版 `with conn` 只 commit 不 close，
+        高频对话下会攒一堆未关闭连接）。"""
         conn = sqlite3.connect(self.db, timeout=10)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_schema(self):
         with self._conn() as c:
@@ -84,6 +97,32 @@ class Memory:
                 c.execute('ALTER TABLE facts ADD COLUMN important INTEGER DEFAULT 0')
             if 'tags' not in cols:
                 c.execute('ALTER TABLE facts ADD COLUMN tags TEXT DEFAULT ""')
+            # 检索索引：召回不再每次对话都全表扫描 + Python 打分
+            try:
+                c.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING
+                    fts5(id UNINDEXED, body, tokenize='unicode61')""")
+                if not c.execute('SELECT count(*) FROM facts_fts').fetchone()[0]:
+                    for r in c.execute('SELECT id, content FROM facts').fetchall():
+                        self._fts_put(c, r['id'], r['content'])
+            except sqlite3.OperationalError:
+                pass   # 无 FTS5 的旧 SQLite：recall 回退到全表扫描
+
+    @staticmethod
+    def _fts_put(c, fact_id, content):
+        """把一条记忆写进 FTS 索引（中文按二元组切词，与查询侧一致）。"""
+        try:
+            body = ' '.join(_split_words(content))
+            c.execute('DELETE FROM facts_fts WHERE id=?', (fact_id,))
+            c.execute('INSERT INTO facts_fts(id, body) VALUES(?,?)', (fact_id, body))
+        except sqlite3.OperationalError:
+            pass
+
+    @staticmethod
+    def _fts_del(c, fact_id):
+        try:
+            c.execute('DELETE FROM facts_fts WHERE id=?', (fact_id,))
+        except sqlite3.OperationalError:
+            pass
 
     # ── facts ────────────────────────────────────────────────────
     @staticmethod
@@ -155,11 +194,14 @@ class Memory:
                     c.execute(
                         "UPDATE facts SET content=?, source=?, important=?, updated_at=? "
                         "WHERE id=?", (keep, ' / '.join(merged_src), new_imp, now, r['id']))
+                    if keep != (r['content'] or ''):
+                        Memory._fts_put(c, r['id'], keep)
                     return
             # 3) 新增
-            c.execute(
+            cur = c.execute(
                 "INSERT INTO facts(content, source, important, created_at, updated_at) "
                 "VALUES(?,?,?,?,?)", (content, source, imp, now, now))
+            Memory._fts_put(c, cur.lastrowid, content)
 
     def save_facts(self, contents, source: str = ""):
         for x in contents or []:
@@ -174,6 +216,7 @@ class Memory:
         with _LOCK, self._conn() as c:
             c.execute("UPDATE facts SET content=?, updated_at=? WHERE id=?",
                       (content, now, fact_id))
+            Memory._fts_put(c, fact_id, content)
 
     def set_important(self, fact_id: int, important: bool):
         """标记/取消重要记忆。"""
@@ -225,10 +268,26 @@ class Memory:
         words = _split_words(query)
         if not words:
             return []
+        cols = ("id, content, source, important, tags, created_at, updated_at, "
+                "access_count")
         with _LOCK, self._conn() as c:
-            rows = c.execute(
-                "SELECT id, content, source, important, tags, created_at, updated_at, "
-                "access_count FROM facts").fetchall()
+            rows = None
+            # 先说 FTS 把候选缩小（几百条记忆里只拿命中的那几条）
+            try:
+                match = ' OR '.join('"%s"' % w.replace('"', '') for w in words[:12])
+                ids = [r['id'] for r in c.execute(
+                    'SELECT id FROM facts_fts WHERE facts_fts MATCH ? LIMIT 500',
+                    (match,)).fetchall()]
+                if ids:
+                    q = ','.join('?' * len(ids))
+                    rows = c.execute(f"SELECT {cols} FROM facts WHERE id IN ({q})",
+                                     ids).fetchall()
+                else:
+                    rows = []
+            except sqlite3.OperationalError:
+                rows = None
+            if rows is None:
+                rows = c.execute(f"SELECT {cols} FROM facts").fetchall()
         scored = []
         for r in rows:
             s = sum(1 for w in words if w in r['content'].lower())
@@ -260,6 +319,7 @@ class Memory:
     def delete_fact(self, fact_id: int):
         with _LOCK, self._conn() as c:
             c.execute("DELETE FROM facts WHERE id=?", (fact_id,))
+            Memory._fts_del(c, fact_id)
 
     # ── prefs ────────────────────────────────────────────────────
     def save_pref(self, key: str, value: str):
@@ -335,7 +395,13 @@ class Memory:
                     "## 偏好\n每行一条，列出用户的明确偏好（格式/风格/习惯）。没有则写\"无\"。\n\n"
                     f"对话：\n{text}"
                 )
-                r = llm.chat([{"role": "user", "content": prompt}], temperature=0.3)
+                if self._gate is not None and not self._gate.acquire('memory', timeout=15):
+                    return   # 前台/批量正忙：本轮不提，下轮再说
+                try:
+                    r = llm.chat([{"role": "user", "content": prompt}], temperature=0.3)
+                finally:
+                    if self._gate is not None:
+                        self._gate.release()
                 out = (r.get('content') or '').strip()
                 if not out:
                     return

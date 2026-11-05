@@ -35,9 +35,10 @@ DEFAULT_CONFIG = {
                "auto_exit": True, "auto_exit_grace_s": 5},
     "limits": {"max_upload_mb": 50, "chat_timeout_s": 600,
                "llm_timeout_s": 300,
-               "compress_threshold_chars": 20000},
+               "compress_threshold_chars": 20000,
+               "model_slots": 1},
     "rag": {"enabled": True, "top_k": 4},
-    "memory": {"extract": True},
+    "memory": {"extract": True, "idle_s": 15},
     "prompt": {"role": "", "rules": []},
 }
 

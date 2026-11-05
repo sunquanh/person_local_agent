@@ -205,3 +205,25 @@ if (wChipsEl) wChipsEl.addEventListener('click', (e) => {
 $('#chatTitle').onclick = () => {
   if (state.cur) renameSession(state.cur, $('#chatTitle').textContent);
 };
+
+/* ── 首屏收尾：右栏空态 / 抽屉按钮 / 模型连通提示 ───────────── */
+syncRightPanel();   // 没会话时也要把“这里是任务·工具·产物”的说明显出来，不留空白栏
+syncPanelBtn();
+fetch('/api/model/status')
+  .then((r) => r.json())
+  .then((d) => {
+    if (!d || d.reachable !== false) return;
+    const card = $('#modelCard');
+    if (!card) return;
+    card.classList.remove('hidden');
+    const name = d.model ? `模型「${d.model}」` : '模型服务';
+    $('#modelCardMsg').textContent =
+      `${name} 暂无响应：${d.error || d.base_url || '地址未配置'}`;
+  })
+  .catch(() => {});
+$('#modelCardBtn').onclick = () => $('#btnSettings').click();
+
+/* 启动成功的标记：index.html 末尾的自查会看它。脚本被浏览器拦下（
+   浏览器太旧 / .js 被当成 text/plain）时这个标记不会出现，页面就会
+   直接告诉用户原因，而不是留一个点不动的空壳。 */
+window.__wbBooted = true;

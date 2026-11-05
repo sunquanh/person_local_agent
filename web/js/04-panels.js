@@ -29,7 +29,7 @@ function renderSessionTools(messages) {
       const r1 = String(s.result).replace(/\s+/g, ' ').trim();
       one = r1 ? ` <span class="tl-res" title="${esc(String(s.result))}">${esc(r1.slice(0, 60))}${r1.length > 60 ? '…' : ''}</span>` : '';
     }
-    return `<div class="tool-line ${cls}">${s.ok ? '✅' : '❌'} ${toolNameHtml(s.tool)}` +
+    return `<div class="tool-line ${cls}">${s.ok ? ico('check') : ico('x')} ${toolNameHtml(s.tool)}` +
       (s.ms ? ` <span class="tl-ms">${esc(fmtMs(s.ms))}</span>` : '') + `${one}` +
       (s.result ? ` <button class="tl-copy" data-copy="${esc(String(s.result))}" title="复制工具结果">${ico('copy')}</button>` : '') +
       `</div>`;
@@ -61,7 +61,7 @@ function appendSessionTool(name, ok, result, ms) {
     `${ico('tool')} 本轮工具调用（${list.children.length + 1}）` + (fails ? ` <span class="tl-err">${fails} 失败</span>` : '');
   const line = document.createElement('div');
   line.className = 'tool-line ' + (ok ? 'ok' : 'err');
-  line.innerHTML = `${ok ? '✅' : '❌'} ${toolNameHtml(name)}` +
+  line.innerHTML = `${ok ? ico('check') : ico('x')} ${toolNameHtml(name)}` +
     (ms ? ` <span class="tl-ms">${esc(fmtMs(ms))}</span>` : '');
   if (result) {
     const r1 = String(result).replace(/\s+/g, ' ').trim();
@@ -84,14 +84,14 @@ function msgUser(text, ts, attachments) {
       return `<span class="att-item" title="${esc(o.path)}">${typeIcon(o.name)} ` +
         `<a href="${href}" target="_blank">${esc(o.name)}</a>` +
         (o.size != null ? `<span class="att-size">${fmtSize(o.size)}</span>` : '') +
-        `<button class="att-del" data-path="${esc(o.path)}" title="删除该附件（移除引用并删除文件）">✕</button></span>`;
+        `<button class="att-del" data-path="${esc(o.path)}" title="删除该附件（移除引用并删除文件）">${ico('x')}</button></span>`;
     }).join('') + '</div>';
   }
   el.innerHTML = `<div class="u-txt">${esc(text)}</div>` + chips +
     (ts ? `<div class="u-ts">${fmtTime(ts)}</div>` : '') +
     `<div class="msg-acts">` +
     `<button class="act-edit" title="编辑这条并重新发送（会删除该条及之后的对话）">${ico('edit')} 编辑重发</button>` +
-    `<button class="act-more" title="更多操作" aria-haspopup="true" aria-expanded="false">⋯</button>` +
+    `<button class="act-more" title="更多操作" aria-haspopup="true" aria-expanded="false">${ico('dots')}</button>` +
     `<div class="act-menu hidden" role="menu">` +
       `<button class="act-fork" title="从这条分叉出新会话（原会话不动）">${ico('fork')} 分支</button>` +
       `<button class="act-one" title="导出这一条为 Markdown">${ico('download')} 导出这条</button>` +
@@ -145,7 +145,7 @@ function msgBot(text, toolSteps, artifacts, thinking, meta, opts) {
   html += changeCardHtml(opts.snapshot);
   html += `<div class="msg-acts">` +
     `<button class="act-copy" title="复制回答">${ico('copy')} 复制</button>` +
-    `<button class="act-more" title="更多操作" aria-haspopup="true" aria-expanded="false">⋯</button>` +
+    `<button class="act-more" title="更多操作" aria-haspopup="true" aria-expanded="false">${ico('dots')}</button>` +
     `<div class="act-menu hidden" role="menu">` +
       `<button class="act-note" title="将回答存为笔记">${ico('note')} 存为笔记</button>` +
       `<button class="act-fork" title="从这条分叉出新会话（原会话不动）">${ico('fork')} 分支</button>` +
@@ -223,7 +223,10 @@ document.addEventListener('keydown', (e) => {
   } else if (mod && e.key.toLowerCase() === 'b') {
     e.preventDefault(); document.body.classList.toggle('hide-left');
   } else if (mod && e.key.toLowerCase() === 'j') {
-    e.preventDefault(); document.body.classList.toggle('hide-right');
+    e.preventDefault();
+    if (panelMq.matches) setPanel(!panelOpen());
+    else document.body.classList.toggle('hide-right');
+    syncPanelBtn();
   } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
     // Alt+↑/↓：在会话列表里上下切换（按当前排序顺序）
     e.preventDefault();
@@ -285,7 +288,7 @@ initResizer($('#rzRight'), 'right');
    同一个 DOM 节点搬家，id 绑定与状态都不变；≥1280px 自动搬回平铺，
    窄桌面窗口也能继续访问次要操作。模型选择框住在 .ch-cluster 里，
    搬回时插回簇首（appendChild 会把它扔到栏尾，簇就散了）。 */
-const HEAD_OVERFLOW = ['#modelSel', '#btnBatch', '#btnExport'];
+const HEAD_OVERFLOW = ['#btnBatch', '#btnExport'];
 const headMq = window.matchMedia('(max-width: 1280px)');
 function closeMoreMenu() {
   const m = $('#moreMenu');
@@ -297,14 +300,9 @@ function syncHeadActions() {
   const bar = $('#chActions'), menu = $('#moreMenu');
   if (!bar || !menu) return;
   const narrow = headMq.matches;
-  const cluster = document.querySelector('.ch-cluster');
   HEAD_OVERFLOW.forEach((sel) => {
     const el = document.querySelector(sel);
     if (!el) return;
-    if (sel === '#modelSel' && !narrow && cluster) {
-      if (el.parentElement !== cluster) cluster.insertBefore(el, cluster.firstChild);
-      return;
-    }
     const target = narrow ? menu : bar;
     if (el.parentElement !== target) target.appendChild(el);
   });
@@ -332,15 +330,54 @@ function syncHeadActions() {
   syncHeadActions();
 })();
 
+/* ── 检查器抽屉：≤1200px 滑出，不再挤压对话列 ────────────── */
+const panelMq = window.matchMedia('(max-width: 1200px)');
+function panelOpen() { return document.body.classList.contains('panel-open'); }
+function setPanel(open) {
+  document.body.classList.toggle('panel-open', !!open);
+  const b = $('#btnPanel');
+  if (b) {
+    b.classList.toggle('on', !!open && panelMq.matches);
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    b.title = open ? '收起检查器（Ctrl+J）' : '显示检查器（Ctrl+J）';
+  }
+}
+function syncPanelBtn() {
+  const b = $('#btnPanel');
+  if (!b) return;
+  if (!panelMq.matches) {
+    setPanel(false);
+    const hidden = document.body.classList.contains('hide-right');
+    b.classList.toggle('on', !hidden);
+    b.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+    b.title = hidden ? '显示检查器（Ctrl+J）' : '收起检查器（Ctrl+J）';
+    return;
+  }
+  b.classList.toggle('on', panelOpen());
+  b.setAttribute('aria-expanded', panelOpen() ? 'true' : 'false');
+  b.title = panelOpen() ? '收起检查器（Ctrl+J）' : '显示检查器（Ctrl+J）';
+}
+$('#btnPanel').onclick = () => {
+  if (panelMq.matches) setPanel(!panelOpen());
+  else document.body.classList.toggle('hide-right');
+  syncPanelBtn();
+};
+$('#panelMask').onclick = () => setPanel(false);
+if (panelMq.addEventListener) panelMq.addEventListener('change', syncPanelBtn);
+else if (panelMq.addListener) panelMq.addListener(syncPanelBtn);
+syncPanelBtn();
+
 $('#btnBatch').onclick = () => openBatch();
 
 /* ── 右栏检查器 Tab：任务 / 工具 / 产物（三块不再争高度）── */
 let rpTab = null;   // 用户手动选的 tab；其无内容时自动回退到有内容的面板
 function rpHas() {
+  // 按“内容”判断，而不是按面板容器的 hidden：容器可能残留上一轮的状态
+  // （例如停止后工具面板已清空但没来得及收起），会误报“有内容”并挡住空态。
   return {
-    todo: !$('#todoPanel').classList.contains('hidden'),
-    tool: !$('#toolPanel').classList.contains('hidden'),
-    art: !$('#artifactPanel').classList.contains('hidden'),
+    todo: ($('#todoList') || {children: []}).children.length > 0,
+    tool: $('#toolPanel').querySelectorAll('.tool-line, .tool-wait').length > 0,
+    art: ($('#artifactList') || {children: []}).children.length > 0,
   };
 }
 function rpActive() {
@@ -359,6 +396,10 @@ function syncRightPanel() {
   bar.classList.toggle('hidden', !active);
   const empty = $('#rpEmpty');
   if (empty) empty.classList.toggle('hidden', !!active);
+  // 容器跟随内容一起收起，避免留下空白卡片
+  if (!has.todo) $('#todoPanel').classList.add('hidden');
+  if (!has.tool) $('#toolPanel').classList.add('hidden');
+  if (!has.art) $('#artifactPanel').classList.add('hidden');
   bar.querySelectorAll('button').forEach((b) => {
     b.classList.toggle('on', b.dataset.tab === active);
     // 没内容的面板：置灰且不可点（避免点了被自动弹回）
@@ -367,6 +408,7 @@ function syncRightPanel() {
     // 不用 disabled：焦点正停在该按钮上时，每帧 sync 会把它踢出焦点，
     // Tab 键导航会被打断；aria-disabled + 点击守卫同样不可点、焦点不丢。
     b.setAttribute('aria-disabled', empty ? 'true' : 'false');
+    b.setAttribute('aria-selected', b.dataset.tab === active ? 'true' : 'false');
   });
   const tn = $('#rpTodoN'), kn = $('#rpToolN'), an = $('#rpArtN');
   if (tn) tn.textContent = ($('#todoProgress').textContent || '').trim();
@@ -406,11 +448,21 @@ setInterval(async () => {
     const d = await r.json();
     const mine = !!d.running && d.running_sid && d.running_sid === state.cur;
     b.classList.toggle('hidden', !mine);
+    // 侧栏“运行中”圆点：会话再多也能看出哪个在跑（对标多任务工作台）
+    const sids = new Set((d.runs || []).filter((r) => r.status === 'running')
+      .map((r) => r.sid));
+    const changed = sids.size !== state.runningSids.size
+      || [...sids].some((x) => !state.runningSids.has(x));
+    if (changed) {
+      state.runningSids = sids;
+      if (typeof renderSessions === 'function') renderSessions();
+    }
     if (d.running && d.running_owner_is_me === false && !state.busy) {
       // 局域网：别的浏览器正在跑任务，排队是正常的，直接说清楚
-      b.textContent = `⏳ 会话「${d.running_title || '其他会话'}」正在运行（由其他用户发起）；你发的消息会排队等待`;
+      b.innerHTML = ico('clock') +
+        ` 会话「${esc(d.running_title || '其他会话')}」正在运行（由其他用户发起）；你发的消息会排队等待`;
     } else {
-      b.textContent = '⏳ 上一轮仍在后台运行，完成后自动刷新本会话';
+      b.innerHTML = ico('clock') + ' 上一轮仍在后台运行，完成后自动刷新本会话';
     }
     if (mine) {
       runSeen = true;

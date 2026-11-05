@@ -150,9 +150,9 @@ function renderTodoPanel(items) {
   $('#todoProgress').textContent = `${done}/${items.length}`;
   $('#todoList').innerHTML = items.map((i) => {
     const s = i.status === 'done' ? 'done' : i.status === 'doing' ? 'doing' : 'pending';
-    const mark = s === 'done' ? '✅' : s === 'doing' ? '🔄' : '○';
-    return `<div class="todo-item ${s}"><span class="ti">${mark}</span>` +
-      `<span class="tt">${esc(i.text || '')}</span></div>`;
+    const mark = s === 'done' ? ico('check') : s === 'doing' ? ico('clock') : ico('circle');
+    return `<div class="todo-item ${s}"><span class="todo-ico">${mark}</span>` +
+      `<span class="todo-tx">${esc(i.text || '')}</span></div>`;
   }).join('');
 }
 function fmtTokens(n) {
@@ -274,7 +274,7 @@ function changeCardHtml(snap) {
 }
 function citationsHtml(list) {
   if (!list || !list.length) return '';
-  return `<div class="cites">📎 来源：` + list.map((c) =>
+  return `<div class="cites">${ico('paperclip')} 来源：` + list.map((c) =>
     `<a href="/api/file?path=${encodeURIComponent(c.rel || '')}" target="_blank" title="${esc(c.snippet || '')}">${esc((c.rel || '').split('/').pop())}</a>`
   ).join('') + '</div>';
 }
@@ -283,7 +283,9 @@ function todoMiniHtml(items) {
   const done = items.filter((i) => i.status === 'done').length;
   return `<details class="todo-mini"><summary>${ico('clipboard')} 任务清单 ${done}/${items.length}</summary>` +
     items.map((i) => `<div class="tm-row ${esc(i.status || 'pending')}">` +
-      `${i.status === 'done' ? '✅' : i.status === 'doing' ? '🔄' : '○'} ${esc(i.text || '')}</div>`).join('') +
+      `<span class="todo-ico">${i.status === 'done' ? ico('check')
+        : i.status === 'doing' ? ico('clock') : ico('circle')}</span>` +
+      `<span class="todo-tx">${esc(i.text || '')}</span></div>`).join('') +
     '</details>';
 }
 

@@ -371,14 +371,14 @@ async function send(overrideText, overrideAtts, opts) {
   let waited = 0;
   const waitTip = document.createElement('div');
   waitTip.className = 'wait-tip';
-  waitTip.textContent = '⏳ 正在请求模型…';
+  waitTip.innerHTML = ico('clock') + ' 正在请求模型…';
   contentDiv.insertBefore(waitTip, cursor);
   const waitTimer = setInterval(() => {
     waited += 1;
     if (!waitTip.isConnected) return;
-    waitTip.textContent = waited >= 30
-      ? `⏳ 已等待 ${waited}s · 内网大模型「首 token」可能较慢（可在 设置 → 运行 调大模型超时），点「停止」可中断`
-      : `⏳ 已等待 ${waited}s…`;
+    waitTip.innerHTML = ico('clock') + (waited >= 30
+      ? ` 已等待 ${waited}s · 内网大模型「首 token」可能较慢（可在 设置 → 运行 调大模型超时），点「停止」可中断`
+      : ` 已等待 ${waited}s…`);
   }, 1000);
   const clearWait = () => {
     clearInterval(waitTimer);
@@ -391,26 +391,36 @@ async function send(overrideText, overrideAtts, opts) {
   contentDiv.insertBefore(mdBox, cursor);
   let mdBuf = '';      // 流式正文累积
   let mdRaf = null;    // 流式渲染节流
+  // 流式阶段只向文本节点追加（O(1)，不碰 selection、不整块重排），
+  // 结束时再一次性 markdown 化。旧版每 60–400ms 整块 innerHTML 重排，
+  // 长回答越写越顿，也正是选区被清掉的原因。
+  mdBox.classList.add('streaming');
+  const streamNode = mdBox.appendChild(document.createTextNode(''));
+  let pendingText = '';
+  function flushStreamText() {
+    if (!pendingText) return;
+    streamNode.appendData(pendingText);
+    pendingText = '';
+  }
   function renderMd(force) {
     mdRaf = null;
-    // 用户正在这条消息里选文字/复制时先不重排：innerHTML 替换会把选区清掉
-    const sel = window.getSelection ? window.getSelection() : null;
-    if (!force && sel && !sel.isCollapsed && sel.anchorNode && mdBox.contains(sel.anchorNode)) {
-      mdRaf = setTimeout(() => renderMd(false), 200);
-      return;
+    if (force) {
+      flushStreamText();
+      mdBox.classList.remove('streaming');
+      mdBox.innerHTML = md.render(mdBuf);
+    } else {
+      flushStreamText();
     }
-    mdBox.innerHTML = md.render(mdBuf);
     followScroll(box);
   }
-  // 自适应节流：正文越长整块重排越贵（低配办公机上会掉帧）
   function scheduleMd() {
     if (mdRaf) return;
     mdRaf = setTimeout(() => renderMd(false),
-                       Math.min(400, 60 + Math.floor(mdBuf.length / 40)));
+                       Math.min(200, 40 + Math.floor(mdBuf.length / 80)));
   }
   // 前端兜底拆分：delta 先进 splitter，正文 -> mdBuf，思考 -> 思考块（后端漏拆也能保证答案干净）
   const jsSplit = createThinkSplitter(
-    (t) => { mdBuf += t; clearWait(); scheduleMd(); },
+    (t) => { mdBuf += t; pendingText += t; clearWait(); scheduleMd(); },
     (t) => {
       clearWait();
       thinkEl = ensureThinkBlock(botEl, thinkEl);
@@ -485,6 +495,8 @@ async function send(overrideText, overrideAtts, opts) {
     if (mdRaf) { clearTimeout(mdRaf); mdRaf = null; }
     if (e.name === 'AbortError') {
       if (mdBuf) {
+        // 停止后也要收尾：去掉 streaming 类，按 markdown 渲染一次（否则残留纯文本态）
+        mdBox.classList.remove('streaming');
         mdBox.innerHTML = md.render(mdBuf || '');
         if (!stopFlag) toast('⏹️ 已停止');
       } else {
@@ -500,11 +512,11 @@ async function send(overrideText, overrideAtts, opts) {
         renderMd(true);
         const en = document.createElement('div');
         en.className = 'err-box';
-        en.innerHTML = `<div class="err-line">❌ ${esc(e.message)}</div>`;
+        en.innerHTML = `<div class="err-line">${ico('warn')} ${esc(e.message)}</div>`;
         contentDiv.appendChild(en);
       } else {
         contentDiv.innerHTML = '';
-        contentDiv.textContent = '❌ ' + e.message;
+        contentDiv.innerHTML = `<div class="err-line">${ico('warn')} ${esc(e.message)}</div>`;
       }
     }
   } finally {
@@ -515,7 +527,7 @@ async function send(overrideText, overrideAtts, opts) {
     state.busy = pendingCount > 0;
     setBusyUI(state.busy);
     $('#queueBar').classList.add('hidden');
-    notifyDone(sendFailed ? '❌ 任务失败' : '✅ 任务完成', text.slice(0, 40));
+    notifyDone(sendFailed ? '任务失败' : '任务完成', text.slice(0, 40));
     if (state.cur) {
       loadSessions();
       refreshSessionMeta();
@@ -550,7 +562,8 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       // 排队可视化：显示位置 + 可取消（取消 = 断开连接，服务端死连接检测自动退出排队）
       const bar = $('#queueBar');
       if (bar) {
-        $('#queueText').textContent = `⏳ 已排队（第 ${f.position} 位）… 等待当前任务完成`;
+        $('#queueText').innerHTML = ico('clock') +
+          ` 已排队（第 ${f.position} 位）… 等待当前任务完成`;
         bar.classList.remove('hidden');
       }
       toast('已排队，等待当前任务完成…');
@@ -651,7 +664,7 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       // 未回答的提问卡在本轮结束时标为超时，避免用户事后点了没反应
       botEl.querySelectorAll('.ask-card:not(.done)').forEach((c) => {
         c.classList.add('done');
-        c.innerHTML = '<div class="ask-done">⌛ 提问已超时，AI 已按最合理的假设继续</div>';
+        c.innerHTML = `<div class="ask-done">${ico('clock')} 提问已超时，AI 已按最合理的假设继续</div>`;
       });
       // 变更审阅卡片（本轮确实写了文件才显示）
       if (f.snapshot && !botEl.querySelector('.change-card')) {
@@ -687,7 +700,7 @@ function handleFrame(f, botEl, thinkEl, ctx) {
             if (d.extended) {
               eb.remove();
               wb.insertAdjacentHTML('beforeend',
-                `<span class="warn-ok">✅ 已延长 ${Math.round((d.seconds || 300) / 60)} 分钟，继续等待…</span>`);
+                `<span class="warn-ok">${ico('check')} 已延长 ${Math.round((d.seconds || 300) / 60)} 分钟，继续等待…</span>`);
             } else {
               eb.remove();
               wb.insertAdjacentHTML('beforeend',
@@ -719,7 +732,7 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       const cdiv = botEl.querySelector('.content');
       const eb = document.createElement('div');
       eb.innerHTML = `<div class="err-box">
-        <div class="err-line">❌ ${esc(f.message || '任务失败')}</div>
+        <div class="err-line">${ico('warn')} ${esc(f.message || '任务失败')}</div>
         <details class="err-more"><summary>查看详情（日志 / 堆栈）</summary>
           <pre>${esc(f.detail || f.message || '')}</pre>
           <div class="err-hint">完整日志：设置 → 运行 → 查看最近日志（工作台 .agent/logs/）</div>

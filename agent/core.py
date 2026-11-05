@@ -13,6 +13,7 @@
 """
 import base64
 import json
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +27,11 @@ log = logsetup.get('core')
 TOOL_RESULT_MAX = 12000
 # 连续失败上限：达到后自动停止（防止无限循环）
 MAX_CONSECUTIVE_FAILURES = 3
+# 项目指令文件（按优先级）与缓存：(mtime, size, 文本）
+_PROJECT_FILES = ('AGENTS.md', 'notes/AGENTS.md', '.agent/rules.md')
+_PROJECT_CACHE = {}
+# 动态上下文消息的固定前缀：让模型知道这段是系统注入的参考，不是用户说的话
+_CONTEXT_PREFIX = '【本轮参考上下文】（系统自动注入，不是用户的原话，回答时不要复述这段）\n'
 # 分级压缩阈值
 COMPRESS_TIER_RECENT = 10    # 最近N轮保留原文
 COMPRESS_TIER_MID = 30       # 中间轮提取工具摘要
@@ -40,18 +46,42 @@ def _truncate_tool_result(text) -> str:
             f"如需完整内容，请用 read_file 分段读取或指定 offset 参数继续。)")
 
 
-def _wrap_tool_result(result_text: str, tool_name: str, args: dict) -> str:
-    """将工具原始结果包装为结构化格式，包含 success/error/hint。
+def _hint_for(text: str, exit_code=None) -> tuple:
+    """兜底：工具没给结构化错误时，从文本里推断 (error_type, hint)。
 
-    模型通过这个格式可以：
-    - 清晰知道操作是否成功
-    - 理解失败的具体原因
-    - 获得修复建议（hint）
+    只在旧工具/未知工具上用到；新工具应通过 ToolResult(code/hint) 直接给。
+    """
+    error_type, hint = '', ''
+    if '超时' in text:
+        error_type = 'timeout'
+        hint = '命令执行超时，可能有死循环或进程卡住。建议：1)检查命令是否正确 2)增加timeout 3)用更简单的命令测试'
+    elif '找不到' in text or 'not found' in text.lower():
+        error_type = 'not_found'
+        hint = '文件或路径不存在。建议：先用 list_dir 确认目录结构，再用正确的路径'
+    elif '拒绝' in text:
+        error_type = 'rejected'
+        hint = '用户拒绝执行。请尝试其他方式完成任务'
+    elif exit_code not in (None, 0):
+        error_type = 'non_zero_exit'
+        hint = f'命令返回非零退出码 {exit_code}，请分析错误输出并修复'
+    elif '语法错误' in text or 'SyntaxError' in text:
+        error_type = 'syntax'
+        hint = 'Python 语法错误，请检查代码并修复'
+    elif '模块' in text and '找不到' in text:
+        error_type = 'missing_dependency'
+        hint = '缺少 Python 模块，可能是未安装的依赖'
+    return error_type or 'unknown', hint
+
+
+def _wrap_tool_result(result_text: str, tool_name: str, args: dict,
+                      meta: dict = None) -> str:
+    """将工具原始结果包装为结构化格式，包含 success/error_type/hint。
+
+    优先采信工具自己给的 ok/code/hint（ToolResult 契约）；只有拿不到时
+    才回退到“前缀 + 文本关键字”推断，避免文案一改判定就失效。
     """
     text = str(result_text or '')
-    is_error = text.startswith(('❌', '⏱️', '⛔'))
-
-    # 提取 exit code（run_command 格式：$ cmd\n(exit N)\n...）
+    meta = meta or {}
     exit_code = None
     if tool_name == 'run_command':
         import re
@@ -59,40 +89,17 @@ def _wrap_tool_result(result_text: str, tool_name: str, args: dict) -> str:
         if m:
             exit_code = int(m.group(1))
 
-    # 构建结构化结果
-    structured = {
-        'success': not is_error,
-        'output': text,
-    }
+    ok = meta.get('ok')
+    is_error = (not ok) if ok is not None else text.startswith(('❌', '⏱️', '⛔'))
+    structured = {'success': not is_error, 'output': text}
 
     if is_error:
-        # 分析错误类型并给出 hint
-        hint = ''
-        if '超时' in text:
-            hint = '命令执行超时，可能有死循环或进程卡住。建议：1)检查命令是否正确 2)增加timeout 3)用更简单的命令测试'
-        elif '找不到' in text or 'not found' in text.lower():
-            hint = '文件或路径不存在。建议：先用 list_dir 确认目录结构，再用正确的路径'
-        elif '拒绝' in text:
-            hint = '用户拒绝执行。请尝试其他方式完成任务'
-        elif exit_code is not None and exit_code != 0:
-            hint = f'命令返回非零退出码 {exit_code}，请分析错误输出并修复'
-        elif '语法错误' in text or 'SyntaxError' in text:
-            hint = 'Python 语法错误，请检查代码并修复'
-        elif '模块' in text and '找不到' in text:
-            hint = '缺少 Python 模块，可能是未安装的依赖'
-
+        error_type, hint = _hint_for(text, exit_code)
+        error_type = meta.get('code') or error_type
+        hint = meta.get('hint') or hint
         if hint:
             structured['hint'] = hint
-        structured['error_type'] = 'timeout' if '超时' in text else \
-                                   'not_found' if '找不到' in text else \
-                                   'rejected' if '拒绝' in text else \
-                                   'runtime' if exit_code and exit_code != 0 else 'unknown'
-    else:
-        if tool_name == 'run_command' and exit_code is not None and exit_code != 0:
-            structured['success'] = False
-            structured['error_type'] = 'non_zero_exit'
-            structured['hint'] = f'命令返回退出码 {exit_code}，请分析输出并修复'
-
+        structured['error_type'] = error_type
     return json.dumps(structured, ensure_ascii=False)
 
 
@@ -140,23 +147,47 @@ def estimate_messages(messages) -> int:
 
 
 # ── 分级上下文压缩：自动压缩与手动「立即压缩」共用同一套摘要规则 ──────
+# 压缩时优先保留的行：路径 / 产出物 / 数字 / 结论。无区别截前 N 字会把"存到
+# outputs/xxx.xlsx"、"保留两位小数"这类关键信息先丢掉。
+_KEY_HINTS = ('outputs/', 'notes/', '.xlsx', '.docx', '.pptx', '.pdf', '.csv',
+              '.py', '.md', '.json', '保存', '生成', '写入', '结论', '决定',
+              '最终', '风险', '待办', '注意', '改为', '使用')
+_KEY_RE = re.compile(r'[0-9]|[/\\]|\.[A-Za-z]{2,5}\b')
+
+
+def _key_lines(text, max_lines: int = 3, line_len: int = 160) -> list:
+    """从一段正文里挑出带路径/文件名/数字/决策的句子（而不是截前 N 字）。"""
+    out = []
+    for raw in re.split(r'[\n。；;]+', str(text or '')):
+        s = raw.strip(' -•*#\t')
+        if len(s) < 4:
+            continue
+        if any(h in s for h in _KEY_HINTS) or _KEY_RE.search(s):
+            out.append(s[:line_len])
+        if len(out) >= max_lines:
+            break
+    return out
+
+
 def _summarize_early(early: list) -> str:
-    """30 条以前的轮次：只保留用户意图与助手结论（各截前 100 / 150 字）。"""
+    """30 条以前的轮次：保留用户意图 + 助手结论里的关键句（路径/数字/决定）。"""
     facts = []
     for m in early or []:
         role = m.get('role', '')
         content = m.get('content') or ''
         if role == 'user' and content.strip():
-            facts.append(content[:100])
+            facts.append("用户：" + re.sub(r'\s+', ' ', content)[:120])
         elif role == 'assistant' and not m.get('tool_calls') and content.strip():
-            facts.append(content[:150])
+            picked = _key_lines(content, 3, 150)
+            if picked:
+                facts.append("助手：" + " / ".join(picked))
     if not facts:
         return ''
-    return "【早期对话要点】\n" + "\n".join(f"- {f}" for f in facts[-8:])
+    return "【早期对话要点】\n" + "\n".join(f"- {f}" for f in facts[-10:])
 
 
 def _summarize_mid(mid: list) -> str:
-    """中间轮次：只留工具结果摘要（成功/失败 + 输出前 200 字）。"""
+    """中间轮次：留工具成功/失败 + 输出里的关键行（路径、数字优先）。"""
     lines = []
     for m in mid or []:
         role = m.get('role', '')
@@ -165,15 +196,18 @@ def _summarize_mid(mid: list) -> str:
             try:
                 parsed = json.loads(content)
                 success = parsed.get('success', True)
-                output = str(parsed.get('output', ''))[:200]
-                lines.append(f"[工具{'✓' if success else '✗'}] {output}")
+                output = str(parsed.get('output', ''))
             except (json.JSONDecodeError, TypeError):
-                lines.append(f"[工具] {content[:200]}")
+                success, output = True, content
+            picked = _key_lines(output, 2, 200)
+            head = (picked[0] if picked else re.sub(r'\s+', ' ', output)[:200])
+            tail = (" / " + picked[1]) if len(picked) > 1 else ''
+            lines.append(f"[工具{'✓' if success else '✗'}] {head}{tail}")
         elif role == 'user' and content.strip():
-            lines.append(f"[用户] {content[:100]}")
+            lines.append(f"[用户] {re.sub(r'\s+', ' ', content)[:120]}")
     if not lines:
         return ''
-    return "【中间操作摘要】\n" + "\n".join(lines[-12:])
+    return "【中间操作摘要】\n" + "\n".join(lines[-14:])
 
 
 def compact_history(history: list, keep_recent: int = COMPRESS_TIER_RECENT):
@@ -331,10 +365,15 @@ class Agent:
         self._compacted = False
         self._rag_hits = []
         self._ctx_stats = {}
-        system = self._build_system(_as_text(user_input))
-        history = self._compress_history(history, reserve=estimate_tokens(system) + 1500)
+        system = self._build_system()
+        ctx_txt = self._dynamic_context(_as_text(user_input))
+        history = self._compress_history(
+            history, reserve=estimate_tokens(system) + estimate_tokens(ctx_txt) + 1500)
         messages = [{"role": "system", "content": system}]
         messages += self._history_messages(history)
+        if ctx_txt:
+            # 独立一条，放在历史之后、用户消息之前：静态前缀不动，KV cache 可复用
+            messages.append({"role": "user", "content": _CONTEXT_PREFIX + ctx_txt})
         messages.append({"role": "user", "content": user_input})
         self._refresh_context(messages)
 
@@ -399,7 +438,8 @@ class Agent:
                     consecutive_failures = 0
                 else:
                     consecutive_failures += 1
-                structured = _wrap_tool_result(res.get('text', ''), name, res.get('args') or {})
+                structured = _wrap_tool_result(res.get('text', ''), name,
+                                               res.get('args') or {}, meta=res)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": c['id'],
@@ -487,7 +527,7 @@ class Agent:
     @staticmethod
     def _failed(c, text):
         return {'ok': False, 'text': text, 'artifacts': [], 'args': {}, 'image': None,
-                'ms': 0,
+                'ms': 0, 'code': 'harness_error', 'hint': '',
                 'step': {"tool": c['name'], "args": {}, "result": text,
                          "ok": False, "artifacts": [], "ms": 0}}
 
@@ -512,15 +552,19 @@ class Agent:
         tool = self.registry.get(name)
         image = None
         ms = 0
+        code, hint = '', ''
         if tool is None:
             result_text = f"❌ 未知工具: {name}"
             ok, arts = False, []
+            code, hint = 'unknown_tool', '该工具不存在，请从工具列表里选择'
         elif self._read_only and name in ASK_FORBIDDEN:
             result_text = "⛔ 当前为只读模式，禁止执行该操作"
             ok, arts = False, []
+            code, hint = 'readonly', '当前为只读模式，只能用读类工具'
         elif not self._approve_tool(name, args):
             result_text = "⛔ 用户拒绝执行该操作"
             ok, arts = False, []
+            code, hint = 'rejected', '用户拒绝该操作，请换一种方式或先征求用户意见'
         else:
             # 单步耗时（U：工具时间线显示每步用了多久；不含用户确认的等待时间）
             t0 = time.monotonic()
@@ -529,10 +573,13 @@ class Agent:
             result_text = res.text
             arts = res.artifacts
             image = getattr(res, 'image', None)
-            ok = not result_text.startswith(("❌", "⛔", "⏱️"))
+            ok = bool(getattr(res, 'ok', None))
+            code = str(getattr(res, 'code', '') or '')
+            hint = str(getattr(res, 'hint', '') or '')
 
         return {'ok': ok, 'text': result_text, 'artifacts': arts,
                 'args': args, 'image': image, 'ms': ms,
+                'code': code, 'hint': hint,
                 'step': {"tool": name, "args": args, "result": result_text,
                          "ok": ok, "artifacts": arts, "ms": ms}}
 
@@ -635,20 +682,36 @@ class Agent:
             "citations": list(self._rag_hits or []),
         }
 
-    # ── 历史消息（补上轮工具摘要，模型才知道自己做过什么）────────────
+    # ── 历史消息（补上轮工具塔果，模型才知道自己做过什么）────────────
+    RECENT_TOOL_KEEP = 3   # 最近 N 个 assistant 轮保留工具结果原文（截断）
+
     def _history_messages(self, history: list) -> list:
+        """把历史转成发给模型的消息。
+
+        最近几轮把工具结果也带上（截断到 800 字），因为“把刚才读到的表改一下”
+        这类跟进在只看“调用过 read_excel ✓”时做不了，模型得重读一遍；
+        更早的轮次只留一行摘要，避免历史无限膨胀。
+        """
+        import re as _re
+        msgs = [m for m in (history or [])
+                if m.get('role') in ('user', 'assistant')]
         out = []
-        for m in (history or []):
+        for i, m in enumerate(msgs):
             role = m.get('role')
-            if role not in ('user', 'assistant'):
-                continue
             content = m.get('content') or ''
             steps = m.get('tool_steps') or []
             if role == 'assistant' and steps:
-                brief = '；'.join(
-                    f"{s.get('tool')}{'✓' if s.get('ok') else '✗'}"
-                    for s in steps[:8])
-                content = (content + f"\n\n[上一轮调用过：{brief}]").strip()
+                if (len(msgs) - i) <= self.RECENT_TOOL_KEEP * 2:
+                    detail = []
+                    for s in steps[:6]:
+                        res = _re.sub(r'\s+', ' ', str(s.get('result') or ''))[:800]
+                        detail.append(f"- {s.get('tool')} {'成功' if s.get('ok') else '失败'}: {res}")
+                    content = (content + "\n\n[上一轮工具结果]\n" + "\n".join(detail)).strip()
+                else:
+                    brief = '；'.join(
+                        f"{s.get('tool')}{'✓' if s.get('ok') else '✗'}"
+                        for s in steps[:8])
+                    content = (content + f"\n\n[上一轮调用过：{brief}]").strip()
             out.append({"role": role, "content": content})
         return out
 
@@ -681,19 +744,25 @@ class Agent:
         """读取工作台里的项目指令：AGENTS.md -> notes/AGENTS.md -> .agent/rules.md。
 
         这是"不同项目不同规矩"的落点，避免所有规则都挤进全局铁律。
-        单文件上限 4000 字符，防止把上下文打爆。
+        单文件上限 4000 字符，防止把上下文打爆；按 mtime/size 缓存，
+        文件没改就不重复读盘（也让每轮上下文的前缀保持稳定）。
         """
         parts = []
-        for rel in ('AGENTS.md', 'notes/AGENTS.md', '.agent/rules.md'):
+        for rel in _PROJECT_FILES:
             try:
                 p = self.ws.root / rel
                 if not p.is_file():
                     continue
-                # 项目指令直接进 system prompt：文件本身或路径中任何一段是
-                # 符号链接时跳过（否则链接可指向工作台外任意文件，敏感内容
-                # 进上下文、恶意指令进系统提示词），与其它路径校验口径一致。
+                # 项目指令会进上下文：文件本身或路径中任何一段是符号链接时
+                # 跳过（否则链接可指向工作台外任意文件），与其它校验口径一致。
                 self.ws._reject_symlinks(p)
-                txt = p.read_text(encoding='utf-8', errors='replace').strip()
+                st = p.stat()
+                hit = _PROJECT_CACHE.get(str(p))
+                if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+                    txt = hit[2]
+                else:
+                    txt = p.read_text(encoding='utf-8', errors='replace').strip()
+                    _PROJECT_CACHE[str(p)] = (st.st_mtime, st.st_size, txt)
             except (OSError, PermissionError) as e:
                 log.warning('项目指令 %s 未读入（%s）', rel, e)
                 continue
@@ -704,30 +773,18 @@ class Agent:
             parts.append(f"【{rel}】\n{txt}")
         if not parts:
             return ''
-        return "\n\n【项目指令】（用户放在工作台里的规则，优先级高于通用做事方式）\n" + "\n\n".join(parts)
+        return ("【项目指令】（用户放在工作台里的规则，优先级高于通用做事方式）\n"
+                + "\n\n".join(parts))
 
-    # ── system prompt ─────────────────────────────────────────────
-    def _build_system(self, user_input: str) -> str:
-        mem_ctx = self.memory.build_context(user_input)
-        rag_ctx = ''
-        if self.rag and user_input.strip():
-            try:
-                hits = self.rag.search(user_input, self.rag_top_k)
-                if hits:
-                    lines = [f"- 【{h['path']}】{h['snippet']}" for h in hits]
-                    rag_ctx = ("\n\n【本地资料库（来自 inputs/notes 里你的文档，可据此回答并注明来源）】\n"
-                               + "\n".join(lines))
-                    # 引用信息随结果回传前端，答案下方显示来源（用户能核对，不是黑盒）
-                    self._rag_hits = [{"rel": h.get('path', ''),
-                                       "snippet": str(h.get('snippet') or '')[:180],
-                                       "score": round(float(h.get('score') or 0), 3)}
-                                      for h in hits[:6]]
-            except Exception as e:
-                log.warning('RAG 检索失败: %s', e)
-                rag_ctx = ''
-        project_txt = self._project_instructions()
-        mode_txt = ("\n【当前模式】只读：只读、分析、回答问题；禁止写文件、执行命令、删除文件。"
-                    if self._read_only else "")
+    # ── system prompt：只放静态内容 ─────────────────────────────
+    def _build_system(self) -> str:
+        """静态系统提示词：角色 / 工作台结构 / 做事方式 / 铁律。
+
+        记忆、RAG、项目指令、只读模式这些每轮都会变的内容**不放在这里**，
+        而是作为历史之后的独立上下文消息（_dynamic_context）——否则前缀
+        从中段就变了，vLLM 的 prefix cache 每轮全失效，离线单卡首 token
+        要白付一次整段 prefill。
+        """
         role_line = (self.role_text if self.role_text else
                      "你是部署在用户个人工作台里的 AI 助手，帮助用户处理办公文档、代码开发和日常资料整理。")
         rules_txt = ''
@@ -755,11 +812,38 @@ class Agent:
 5. 需要用户确认关键信息（目标格式、范围、取舍）时用 ask_user 提问，不要靠猜。
 6. 所有步骤完成后直接回复结论；也可调用 final_answer 收尾。回复里说明产物路径。
 7. 连续失败时不要盲目重试，先分析原因或换一种做法。
-{rag_ctx}
-{mem_ctx}
-{project_txt}
 {rules_txt}
-{mode_txt}
 
 【风格】回复用中文，简洁、结构化。办公任务优先用专业文档工具（word/excel/ppt）。
-需要展示内部推理时用 <think>...</think> 包裹（标签内不写最终答案），系统会自动折叠展示。"""
+需要展示内部推理时用  thinking...</think> 包裹（标签内不写最终答案），系统会自动折叠展示。"""
+
+    # ── 动态上下文：每轮变化的内容 ────────────────────────────
+    def _dynamic_context(self, user_input: str) -> str:
+        """拼装本轮会变的部分（模式 / 项目指令 / RAG / 记忆）。
+
+        返回空串时不注入，避免白占 token。RAG 命中同时写入 _rag_hits，
+        供前端在答案下方展示来源。
+        """
+        parts = []
+        if self._read_only:
+            parts.append("【当前模式】只读：只读、分析、回答问题；禁止写文件、执行命令、删除文件。")
+        project_txt = self._project_instructions()
+        if project_txt:
+            parts.append(project_txt)
+        if self.rag and user_input.strip():
+            try:
+                hits = self.rag.search(user_input, self.rag_top_k)
+                if hits:
+                    lines = [f"- 【{h['path']}】{h['snippet']}" for h in hits]
+                    parts.append("【本地资料库（来自 inputs/notes 里你的文档，可据此回答并注明来源）】\n"
+                                 + "\n".join(lines))
+                    self._rag_hits = [{"rel": h.get('path', ''),
+                                       "snippet": str(h.get('snippet') or '')[:180],
+                                       "score": round(float(h.get('score') or 0), 3)}
+                                      for h in hits[:6]]
+            except Exception as e:
+                log.warning('RAG 检索失败: %s', e)
+        mem_ctx = self.memory.build_context(user_input)
+        if mem_ctx:
+            parts.append(mem_ctx)
+        return "\n\n".join(parts)
