@@ -20,12 +20,16 @@
        别的程序 → 自动往后找一个空闲端口，而不是报错退出
   3. 出错不闪退，把原因留在窗口里（双击场景看不到命令行历史）
   4. 启动参数交给 app.py，沿用它的环境自检和启动横幅
+  5. 当前解释器低于 3.11 时，自动换一个装了依赖的 3.11+ 重起（离线机
+     常装多个 Python，启动.bat 容易命中旧的那个）
 
 「关网页即退」由 server/httpd.py 实现，这里只负责开关和提示。
 """
 import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -193,6 +197,160 @@ def choose_port(want):
     return None, 'none'
 
 
+# ── 解释器选择 ──────────────────────────────────────────────────
+# 离线机常装多个 Python：终端里 `python` 是 3.11.3（依赖装在那），但
+# 双击启动.bat 时 py 启动器 / PATH 可能先命中旧的 3.9，于是 app.py 的
+# 环境检测报一堆“未安装”——其实只是解释器选错了。当前解释器低于 3.11
+# 时，这里先找一个更好的再重起一次；已是 3.11+ 时什么都不做。
+# 只在 Windows 上做这件事：Linux/mac 下解释器由用户自己掌控。
+MIN_PYTHON = (3, 11)
+_OPTIONAL_MODULES = ('docx', 'openpyxl', 'pptx', 'pypdf', 'PIL')
+_PROBE_CODE = (
+    "import sys\n"
+    "ok = 0\n"
+    "for _m in ('docx', 'openpyxl', 'pptx', 'pypdf', 'PIL'):\n"
+    "    try:\n"
+    "        __import__(_m); ok += 1\n"
+    "    except Exception:\n"
+    "        pass\n"
+    "print(sys.version_info.major, sys.version_info.minor, ok)\n"
+)
+
+
+def _probe_prefix(prefix):
+    """用候选解释器跑一次探测，返回 (major, minor, 可选依赖数)，失败返回 None。"""
+    try:
+        r = subprocess.run(prefix + ['-c', _PROBE_CODE],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           text=True, timeout=10)
+    except Exception:
+        return None
+    try:
+        major, minor, ok = (int(x) for x in r.stdout.split()[:3])
+    except Exception:
+        return None
+    return (major, minor, ok)
+
+
+def _prefix_exe(prefix):
+    """候选前缀对应的解释器路径（py 启动器前缀返回 None，靠探测到的版本比）。"""
+    if len(prefix) == 1 and os.path.isfile(prefix[0]):
+        return os.path.normcase(os.path.abspath(prefix[0]))
+    return None
+
+
+def _find_better_python(current_exe=None):
+    """在 Windows 上找一个比当前更新、且装了办公依赖的 Python，返回 argv 前缀或 None。
+
+    顺序：py 启动器指定版 → py 启动器最新版 → where 列出的 python →
+    常见安装目录。候选按（可选依赖数，版本号）排序；拿到满分依赖的
+    直接返回，不再继续探测。
+    """
+    if os.name != 'nt':
+        return None
+    if current_exe is None:
+        current_exe = os.path.normcase(os.path.abspath(sys.executable))
+    prefixes = []
+    if shutil.which('py'):
+        for spec in ('-3.11', '-3.12', '-3.13', '-3'):
+            prefixes.append(['py', spec])
+    for cmd in ('python', 'python3'):
+        try:
+            r = subprocess.run(['where', cmd], stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, text=True, timeout=10)
+            for line in r.stdout.splitlines():
+                p = line.strip()
+                if p.lower().endswith('.exe') and os.path.isfile(p):
+                    prefixes.append([p])
+        except Exception:
+            pass
+    bases = []
+    for var in ('LOCALAPPDATA', 'ProgramFiles', 'ProgramFiles(x86)'):
+        d = os.environ.get(var)
+        if d:
+            bases.append(os.path.join(d, 'Programs', 'Python') if var == 'LOCALAPPDATA'
+                         else d)
+    bases.append('C:\\')
+    for base in bases:
+        try:
+            names = os.listdir(base)
+        except Exception:
+            continue
+        for name in names:
+            if not name.startswith('Python3'):
+                continue
+            p = os.path.join(base, name, 'python.exe')
+            if os.path.isfile(p):
+                prefixes.append([p])
+    # 去重（py 启动器前缀按原样保留，路径前缀按规范化路径去重）
+    seen, uniq = set(), []
+    for pre in prefixes:
+        key = ' '.join(pre) if pre[0] == 'py' else os.path.normcase(os.path.abspath(pre[0]))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(pre)
+    best, best_score = None, None
+    for pre in uniq:
+        if _prefix_exe(pre) == current_exe:
+            continue
+        info = _probe_prefix(pre)
+        if info is None:
+            continue
+        major, minor, ok = info
+        if (major, minor) < MIN_PYTHON:
+            continue
+        if ok >= len(_OPTIONAL_MODULES):
+            return pre
+        score = (ok, major, minor)
+        if best_score is None or score > best_score:
+            best, best_score = pre, score
+    return best
+
+
+def _ensure_python(version=None, executable=None, argv=None, environ=None):
+    """当前解释器低于 3.11 时，换一个更好的重起；否则什么都不做。
+
+    参数只为可测试性而设，正常调用全部取 live 值。
+    """
+    if os.name != 'nt':
+        return
+    if version is None:
+        version = sys.version_info
+    if executable is None:
+        executable = sys.executable
+    if argv is None:
+        argv = sys.argv
+    if environ is None:
+        environ = os.environ
+    ver_str = '%s.%s.%s' % tuple(version[:3])
+    if version >= MIN_PYTHON:
+        return
+    if environ.get('WORKBENCH_REEXEC'):
+        say('⚠️  当前解释器仍是 Python %s（低于 3.11），但没找到更好的，继续用它启动。'
+            % ver_str)
+        say('   解释器：%s' % executable)
+        return
+    best = _find_better_python(os.path.normcase(os.path.abspath(executable)))
+    if best is None:
+        say('⚠️  当前解释器是 Python %s（低于 3.11），且没找到已装的 3.11+，继续用它启动。'
+            % ver_str)
+        say('   解释器：%s' % executable)
+        say('   依赖装在 3.11 下的话，请用它启动，例如：py -3.11 start.py')
+        return
+    script = os.path.abspath(__file__)
+    env = dict(environ)
+    env['WORKBENCH_REEXEC'] = '1'
+    say('   当前解释器是 Python %s，改用更好的解释器重起…'
+        % ver_str)
+    try:
+        rc = subprocess.run(best + [script] + argv[1:], env=env).returncode
+    except Exception as e:
+        say('⚠️  换解释器重起失败（%s），继续用当前解释器启动。' % e)
+        return
+    sys.exit(rc)
+
+
 # ── 主流程 ──────────────────────────────────────────────────────
 
 def parse_args(argv):
@@ -220,6 +378,7 @@ def parse_args(argv):
 
 def main():
     setup_console()
+    _ensure_python()
     action, want_port, lan, no_browser, keep = parse_args(sys.argv[1:])
     if action == 'help':
         return 0
@@ -244,6 +403,7 @@ def main():
     base_url = (model.get('base_url') or '').strip()
 
     say('  配置文件 : %s' % CFG_PATH)
+    say('  解释器   : %s (Python %s)' % (sys.executable, sys.version.split()[0]))
     say('  模型     : %s  @  %s' % (model.get('name') or '(未设置)',
                                    base_url or '(未设置)'))
     say('  工作台   : %s' % (ws_root or '(未设置)'))
