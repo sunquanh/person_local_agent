@@ -114,35 +114,13 @@ def _read_text_best_effort(p: Path):
 
 
 class ToolResult:
-    """工具返回值。
-
-    ok/code/hint 是给 Agent 的结构化契约：失败判定不再靠 `❌` 前缀猜，
-    错误类型与修复建议由工具自己给出（未显式给时按文本前缀兜底）。
-    """
-
-    def __init__(self, text: str, artifacts=None, image=None,
-                 ok=None, code: str = '', hint: str = ''):
+    def __init__(self, text: str, artifacts=None, image=None):
         self.text = text
         self.artifacts = list(artifacts or [])
         self.image = image        # 图片绝对路径（多模态模型用）
-        if ok is None:
-            ok = not str(text or '').startswith(("❌", "⛔", "⏱️"))
-        self.ok = bool(ok)
-        self.code = code or ('ok' if self.ok else 'error')
-        self.hint = hint
-
-    @classmethod
-    def fail(cls, text: str, code: str = 'error', hint: str = '',
-             artifacts=None, image=None):
-        """失败结果的统一构造入口（调用方不用再手写 ❌ 前缀）。"""
-        if not str(text or '').startswith(("❌", "⛔", "⏱️")):
-            text = "❌ " + str(text or '')
-        return cls(text, artifacts=artifacts, image=image,
-                   ok=False, code=code, hint=hint)
 
     def to_dict(self):
-        return {"text": self.text, "artifacts": self.artifacts,
-                "ok": self.ok, "code": self.code}
+        return {"text": self.text, "artifacts": self.artifacts}
 
 
 def _safe_name(name: str) -> str:
@@ -169,9 +147,7 @@ class Tool:
             return ToolResult(str(r))
         except Exception as e:  # 工具错误返回给模型，不中断循环
             log.warning('工具 %s 执行失败: %s: %s', self.name, type(e).__name__, e)
-            return ToolResult.fail(f"工具执行失败: {type(e).__name__}: {e}",
-                                   code='exception',
-                                   hint='工具内部异常，请检查参数是否合法；持续失败请换一种做法')
+            return ToolResult(f"❌ 工具执行失败: {type(e).__name__}: {e}")
 
 
 # ── 可选依赖检测（启动环境检测 / /api/health 共用）───────────────
@@ -451,14 +427,10 @@ class ToolRegistry:
             # 危险命令：核心层已确认过（pre_approved）则不重复弹窗，否则再拦一次
             if _is_dangerous(cmd) and cmd not in self.pre_approved:
                 if self.confirm_callback is None:
-                    return ToolResult.fail(f"危险命令被拒绝（未配置确认）：{cmd}",
-                                           code='rejected',
-                                           hint='未配置确认通道，危险命令一律不执行')
+                    return ToolResult(f"⛔ 危险命令被拒绝（未配置确认）：{cmd}")
                 ok = self.confirm_callback(cmd)
                 if not ok:
-                    return ToolResult.fail(f"用户拒绝执行：{cmd}",
-                                           code='rejected',
-                                           hint='用户拒绝执行该命令，请换一种不需要危险操作的做法')
+                    return ToolResult(f"⛔ 用户拒绝执行：{cmd}")
             try:
                 timeout = min(max(int(a.get('timeout', 120)), 1), 900)
             except (TypeError, ValueError):
@@ -473,7 +445,7 @@ class ToolRegistry:
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         **kwargs)
             except Exception as e:
-                return ToolResult.fail(f"无法启动命令: {e}", code='spawn_error')
+                return ToolResult(f"❌ 无法启动命令: {e}")
             timed_out = False
             try:
                 out_b, err_b = proc.communicate(timeout=timeout)
@@ -489,19 +461,15 @@ class ToolRegistry:
             body = out + (("\n[stderr]\n" + err) if err.strip() else '')
             body = body.strip() or "(无输出)"
             if timed_out:
-                return ToolResult.fail(f"命令执行超时（>{timeout}s）已终止：{cmd}",
-                                       code='timeout',
-                                       hint='命令超时，可能有死循环或进程卡住；请检查命令或调大 timeout')
+                return ToolResult(f"⏱️ 命令执行超时（>{timeout}s）已终止：{cmd}")
             # 长输出截断（避免一次命令把上下文打爆）
             if len(body) > 8000:
                 body = body[:8000] + f"\n…(输出共 {len(body)} 字符，已截断)"
             if proc.returncode != 0:
                 # 非零退出必须带 ❌ 前缀：core._exec_one 只看此前缀定 ok，
                 # 否则连续失败计数被清零、熔断永不触发。
-                return ToolResult.fail(f"$ {cmd}\n(exit {proc.returncode})\n"
-                                  f"…(耗时 {time.monotonic() - t0:.1f}s)\n{body}",
-                                  code='non_zero_exit',
-                                  hint=f'命令返回退出码 {proc.returncode}，请分析输出并修复')
+                return ToolResult(f"❌ $ {cmd}\n(exit {proc.returncode})\n"
+                                  f"…(耗时 {time.monotonic() - t0:.1f}s)\n{body}")
             return ToolResult(f"$ {cmd}\n(exit {proc.returncode})\n"
                               f"…(耗时 {time.monotonic() - t0:.1f}s)\n{body}")
 
@@ -514,6 +482,14 @@ class ToolRegistry:
             - 审批：不走 shell 命令白名单（见 core._approve_tool），除 trusted
               档外每次人工确认；_is_dangerous 正则不对代码文本做安全承诺
             """
+            # 打包成 exe 后没有内置 Python 解释器：sys.executable 就是 exe 本身，
+            # [exe, '-c', ...] 不会执行代码（只会被启动器当成未知参数忽略），
+            # 必须显式拒绝，不能静默走错路。
+            if getattr(sys, 'frozen', False):
+                return ToolResult(
+                    "❌ exe 版不支持执行 Python 代码：打包后没有内置解释器。"
+                    "如需执行代码，请用源码版（python start.py），"
+                    "或改用 run_command 调用本机已安装的 Python。")
             code = a['code']
             try:
                 timeout = min(max(int(a.get('timeout', 60)), 1), 300)
@@ -544,7 +520,7 @@ class ToolRegistry:
                     cwd=str(self.ws.root), encoding='utf-8', errors='replace',
                     **kwargs)
             except Exception as e:
-                return ToolResult.fail(f"无法启动子进程: {e}", code='spawn_error')
+                return ToolResult(f"❌ 无法启动子进程: {e}")
             try:
                 out, err = proc.communicate(input=code, timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -553,9 +529,7 @@ class ToolRegistry:
                     proc.communicate(timeout=5)
                 except Exception:
                     pass
-                return ToolResult.fail(f"代码执行超时（>{timeout}s）已强制终止。请检查是否有死循环。",
-                                       code='timeout',
-                                       hint='代码执行超时，请减少数据量或避免死循环')
+                return ToolResult(f"⏱️ 代码执行超时（>{timeout}s）已强制终止。请检查是否有死循环。")
             out = (out or '') + ((f"\n[stderr]\n{err}") if err else '')
             out = out.strip()
             if proc.returncode != 0 and not out:

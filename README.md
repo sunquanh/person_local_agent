@@ -61,6 +61,14 @@ python app.py
 #    http://127.0.0.1:8080
 ```
 
+## exe 版（免装 Python）
+
+从 GitHub Release 页下载 `LocalAgent.exe`，和 `config.json` 放同一个文件夹，双击就能跑，不用装 Python。
+
+- 配置文件：`config.json` 放 exe 旁边；第一次运行没有它时，会按 `config.example.json` 自动生成一份，再填模型地址就能用。改配置不用重新打包。
+- 启动参数和 `启动.bat` 一样：`LocalAgent.exe 8081` 换端口、`LocalAgent.exe lan` 开局域网、`LocalAgent.exe keep` 关网页后不退出。
+- 打包方式：推 `v*` 标签时 GitHub 自动用 PyInstaller 打包（见 `tools/build_release.py` 与 `local_agent.spec`）。
+
 ## API Key 加密（可选但推荐）
 
 配置文件里的 api_key 可以直接写明文，也可以用加密密文（与老项目 ENC: 约定一致），

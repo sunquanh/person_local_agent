@@ -33,8 +33,15 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CFG_PATH = os.path.join(HERE, 'config.json')
-EXAMPLE_PATH = os.path.join(HERE, 'config.example.json')
+# 打包成 exe 后：配置文件放 exe 旁边，示例配置在临时解压目录里
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    RESOURCE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = HERE
+    RESOURCE_DIR = HERE
+CFG_PATH = os.path.join(BASE_DIR, 'config.json')
+EXAMPLE_PATH = os.path.join(RESOURCE_DIR, 'config.example.json')
 TITLE = '加菲猫的工作室'
 DEFAULT_PORT = 8080
 
@@ -378,7 +385,9 @@ def parse_args(argv):
 
 def main():
     setup_console()
-    _ensure_python()
+    # 打包成 exe 后没有解释器可换，跳过
+    if not getattr(sys, 'frozen', False):
+        _ensure_python()
     action, want_port, lan, no_browser, keep = parse_args(sys.argv[1:])
     if action == 'help':
         return 0

@@ -31,6 +31,8 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# 打包用的 spec 是手写的、CI 要用，放行
+!local_agent.spec
 
 # Installer logs
 pip-log.txt

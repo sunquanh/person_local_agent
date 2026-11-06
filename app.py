@@ -20,6 +20,14 @@ except Exception:
     pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 打包成 exe（PyInstaller 单文件）后，__file__ 指向临时解压目录；
+# 配置文件放 exe 旁边，运行时取 exe 所在目录；前端等数据文件走解压目录。
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    RESOURCE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = HERE
+    RESOURCE_DIR = HERE
 sys.path.insert(0, HERE)
 
 # 与 config.example.json 对齐：缺的键在这里补齐（值与代码既有默认值一致，
@@ -35,10 +43,9 @@ DEFAULT_CONFIG = {
                "auto_exit": True, "auto_exit_grace_s": 5},
     "limits": {"max_upload_mb": 50, "chat_timeout_s": 600,
                "llm_timeout_s": 300,
-               "compress_threshold_chars": 20000,
-               "model_slots": 1},
+               "compress_threshold_chars": 20000},
     "rag": {"enabled": True, "top_k": 4},
-    "memory": {"extract": True, "idle_s": 15},
+    "memory": {"extract": True},
     "prompt": {"role": "", "rules": []},
 }
 
@@ -87,7 +94,7 @@ def check_env(cfg: dict) -> bool:
 
     # 3) 前端资源
     missing = [f for f in ('markdown-it.min.js', 'highlight.min.js', 'github.min.css')
-               if not (_P(HERE) / 'web' / 'vendor' / f).is_file()]
+               if not (_P(RESOURCE_DIR) / 'web' / 'vendor' / f).is_file()]
     if missing:
         print(f"  ⚠️ 前端资源缺失: {', '.join(missing)}（web/vendor 目录被删了？）")
     else:
@@ -225,7 +232,7 @@ def main():
     ap = argparse.ArgumentParser(description='加菲猫的工作室')
     ap.add_argument('--host', default=None)
     ap.add_argument('--port', type=int, default=None)
-    ap.add_argument('--config', default=os.path.join(HERE, 'config.json'))
+    ap.add_argument('--config', default=os.path.join(BASE_DIR, 'config.json'))
     ap.add_argument('--no-browser', action='store_true')
     ap.add_argument('--keep-alive', action='store_true',
                     help='关闭所有网页后不退出服务（默认会在 5 秒后退出）')
