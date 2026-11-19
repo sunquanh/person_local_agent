@@ -232,15 +232,22 @@ def main():
     ap = argparse.ArgumentParser(description='加菲猫的工作室')
     ap.add_argument('--host', default=None)
     ap.add_argument('--port', type=int, default=None)
-    ap.add_argument('--config', default=os.path.join(BASE_DIR, 'config.json'))
+    ap.add_argument('--config', default=None,
+                    help='显式配置文件。相对路径相对程序目录，不随启动目录变化')
+    ap.add_argument('--workspace', default=None,
+                    help='工作目录。相对路径相对程序目录。会话和配置都在这里')
     ap.add_argument('--no-browser', action='store_true')
     ap.add_argument('--keep-alive', action='store_true',
                     help='关闭所有网页后不退出服务（默认会在 5 秒后退出）')
     args = ap.parse_args()
 
+    from server.storepath import StorePathError, prepare_launch
     try:
-        cfg = load_config(args.config)
-    except ValueError as e:
+        launch = prepare_launch(BASE_DIR, config_arg=args.config,
+                                workspace_arg=args.workspace)
+        cfg = launch.config
+        cfg = validate_config(cfg)
+    except (ValueError, StorePathError) as e:
         print(f"\n❌ {e}")
         sys.exit(1)
     if args.host:
@@ -267,7 +274,10 @@ def main():
 
     from server.httpd import serve
     try:
-        server = serve(cfg, host=args.host, port=args.port, config_path=args.config)
+        server = serve(cfg, host=args.host, port=args.port,
+                       config_path=launch.config_path,
+                       program_dir=BASE_DIR,
+                       also_config_path=launch.explicit_config_path)
     except OSError as e:
         print(f"\n❌ 启动失败: {e}")
         print("   原因: 端口被其他程序占用")

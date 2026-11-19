@@ -277,9 +277,15 @@ def _delete_attachment_ref(app, sid: str, ts: float, path: str):
 
 
 class AgentServer:
-    def __init__(self, config: dict, config_path: str = None):
+    def __init__(self, config: dict, config_path: str = None, program_dir: str = None,
+                 also_config_path: str = None):
         self.config = config
         self.config_path = config_path
+        self.program_dir = program_dir
+        self._config_paths = []
+        for _p in (config_path, also_config_path):
+            if _p and _p not in self._config_paths:
+                self._config_paths.append(_p)
         m = config.get('model', {}) or {}
         w = config.get('workspace', {}) or {}
         limits = config.get('limits', {}) or {}
@@ -824,19 +830,24 @@ class AgentServer:
                            for s in servers) or '（空）')
 
     def _persist(self):
-        """原子写 config.json（api_key 已保证是 ENC 形态）。"""
-        if not self.config_path:
+        """原子写配置。密钥在调用前已是 ENC 形态。不在日志里打印正文。"""
+        paths = list(self._config_paths or [])
+        if self.config_path and self.config_path not in paths:
+            paths.append(self.config_path)
+        if not paths:
             return
         try:
             import tempfile
-            p = self.config_path
-            d = os.path.dirname(p) or '.'
-            fd, tmp = tempfile.mkstemp(dir=d, prefix='config.', suffix='.tmp')
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, p)
+            payload = json.dumps(self.config, ensure_ascii=False, indent=2)
+            for p in paths:
+                d = os.path.dirname(p) or '.'
+                os.makedirs(d, exist_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=d, prefix='config.', suffix='.tmp')
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    f.write(payload)
+                os.replace(tmp, p)
         except Exception as e:
-            log.error('保存配置失败: %s', e)
+            log.error('保存配置失败: %s', type(e).__name__)
 
     def _redacted_config(self) -> dict:
         """配置快照（**脱敏**）：api_key / MCP 环境变量 / 访问令牌一律不外带。
@@ -1265,6 +1276,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.app._redacted_config())
             if path == '/api/settings':
                 return self._json(self._settings())
+            if path == '/api/ui':
+                from server.storepath import load_ui
+                return self._json(load_ui(str(self.app.ws.root)))
             if path == '/api/rag/index':
                 # GET 但有副作用（重建索引）：走写请求的 CSRF 门禁，
                 # 否则任意网页一次顶级导航就能凭 cookie 触发。
@@ -1809,6 +1823,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/workspace/delete':
                 d = json.loads(self._read_body() or b'{}')
                 return self._workspace_delete(d.get('path', ''))
+            if path == '/api/ui':
+                from server.storepath import save_ui
+                d = json.loads(self._read_body() or b'{}')
+                if not isinstance(d, dict):
+                    return self._err(400, '界面偏好必须是对象')
+                saved = save_ui(str(self.app.ws.root), d)
+                return self._json(saved)
             if path == '/api/settings':
                 d = json.loads(self._read_body() or b'{}')
                 # 工作台目录（D）：只校验 + 写 config，热切换风险大（会话/记忆/RAG/作业
@@ -1829,6 +1850,9 @@ class Handler(BaseHTTPRequestHandler):
                         self.app.config.setdefault('workspace', {})['root'] = \
                             str(cand.root)
                         self.app._persist()
+                        if self.app.program_dir:
+                            from server.storepath import write_pointer
+                            write_pointer(self.app.program_dir, str(cand.root))
                         log.info('工作台目录已改（重启生效）: %s', cand.root)
                 self.app.save_config(model=d.get('model'), limits=d.get('limits'),
                                      rag=d.get('rag'), security=d.get('security'),
@@ -2922,8 +2946,10 @@ def _release_instance_lock(lock_path):
         pass
 
 
-def serve(config: dict, host: str = None, port: int = None, config_path: str = None):
-    app = AgentServer(config, config_path=config_path)
+def serve(config: dict, host: str = None, port: int = None, config_path: str = None,
+          program_dir: str = None, also_config_path: str = None):
+    app = AgentServer(config, config_path=config_path, program_dir=program_dir,
+                      also_config_path=also_config_path)
     bind_host = host or config.get('server', {}).get('host', '127.0.0.1')
     bind_port = port or int(config.get('server', {}).get('port', 8080))
 

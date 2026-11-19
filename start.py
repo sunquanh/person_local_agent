@@ -397,21 +397,28 @@ def main():
     line('═')
 
     try:
-        cfg = read_config()
+        if (not os.path.isfile(CFG_PATH)
+                and not os.path.isfile(os.path.join(HERE, '.workspace-root'))):
+            if not bootstrap_config():
+                return 1
+        sys.path.insert(0, HERE)
+        from server.storepath import StorePathError, prepare_launch
+        try:
+            launch = prepare_launch(HERE)
+        except StorePathError as e:
+            say('❌ %s，启动已停止，请修复后重试。' % e)
+            return 1
+        cfg = launch.config
     except ValueError as e:
         say('❌ %s，启动已停止，请修复后重试。' % e)
         return 1
-    if cfg is None:
-        if not bootstrap_config():
-            return 1
-        cfg = read_config() or {}
 
     model = cfg.get('model') or {}
     srv = cfg.get('server') or {}
     ws_root = (cfg.get('workspace') or {}).get('root', '')
     base_url = (model.get('base_url') or '').strip()
 
-    say('  配置文件 : %s' % CFG_PATH)
+    say('  配置文件 : %s' % launch.config_path)
     say('  解释器   : %s (Python %s)' % (sys.executable, sys.version.split()[0]))
     say('  模型     : %s  @  %s' % (model.get('name') or '(未设置)',
                                    base_url or '(未设置)'))
@@ -482,8 +489,9 @@ def main():
         pass
 
     # 交给 app.py：环境自检、启动横幅、自动开浏览器都在那边
-    sys.argv = [os.path.join(HERE, 'app.py'), '--config', CFG_PATH,
-                '--port', str(port)]
+    # 不把程序目录 config.json 当成「用户显式指定」。
+    # 工作目录由 .workspace-root / 旧配置决定，app.py 再读该目录里的配置。
+    sys.argv = [os.path.join(HERE, 'app.py'), '--port', str(port)]
     if lan:
         sys.argv += ['--host', '0.0.0.0']
     if keep:

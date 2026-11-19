@@ -10,6 +10,7 @@ function setModelOv(name) {
   if (name) modelOvMap[state.cur] = String(name).trim();
   else delete modelOvMap[state.cur];
   try { localStorage.setItem('modelOverrides', JSON.stringify(modelOvMap)); } catch (e) {}
+  persistUi({ model_overrides: modelOvMap });
   renderModelSel();
 }
 async function renderModelSel() {
@@ -170,8 +171,7 @@ wbPageRegister();
 
 applyTheme();
 slashFillTemplates();
-loadSessions().then(() => {
-  // 记住最后会话：刷新后自动恢复上次打开的会话，不用手动找
+function openRememberedSession() {
   let last = null;
   try { last = localStorage.getItem('lastSession'); } catch (e) {}
   if (last && state.sessions.some((s) => s.id === last)) {
@@ -179,6 +179,21 @@ loadSessions().then(() => {
   } else if (!state.cur) {
     showWelcome(true);
   }
+}
+fetch('/api/ui').then((r) => r.json()).then((ui) => {
+  if (!ui || typeof ui !== 'object') return;
+  if (ui.theme === 'dark' || ui.theme === 'light') {
+    localStorage.setItem('theme', ui.theme);
+    applyTheme();
+  }
+  if (ui.model_overrides && typeof ui.model_overrides === 'object') {
+    modelOvMap = ui.model_overrides;
+  }
+  if (ui.last_session) localStorage.setItem('lastSession', ui.last_session);
+  const w = ui.panel_widths || {};
+  if (w.sb) document.body.style.setProperty('--sb-w', Number(w.sb) + 'px');
+}).catch(() => {}).finally(() => {
+  loadSessions().then(openRememberedSession);
 });
 setBusyUI(false);
 fetch('/api/health').then((r) => r.json()).then((d) => {

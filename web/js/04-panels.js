@@ -269,8 +269,16 @@ function initResizer(el, side) {
       document.body.classList.remove('resizing');
       document.removeEventListener('mousemove', move);
       document.removeEventListener('mouseup', up);
-      try { localStorage.setItem(KEY, String(Math.round(target.getBoundingClientRect().width))); }
-      catch (err) {}
+      try {
+        const width = Math.round(target.getBoundingClientRect().width);
+        localStorage.setItem(KEY, String(width));
+        const widths = {
+          sb: Math.round(parseFloat(document.body.style.getPropertyValue('--sb-w')) || 0),
+          rp: Math.round(parseFloat(document.body.style.getPropertyValue('--rp-w')) || 0),
+        };
+        widths[side === 'left' ? 'sb' : 'rp'] = width;
+        persistUi({ panel_widths: widths });
+      } catch (err) {}
     };
     document.addEventListener('mousemove', move);
     document.addEventListener('mouseup', up);

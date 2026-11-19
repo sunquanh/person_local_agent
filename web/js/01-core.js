@@ -216,11 +216,20 @@ function syncThemeBtn() {
     '<span>' + (dark ? '深色' : '浅色') + '</span>';
 }
 /* 主题入口：顶栏用量条那一行一键切；设置页 / 命令面板共用同一函数 */
+function persistUi(patch) {
+  // 主题、上次会话、模型覆盖和栏宽跟工作目录走，不只留在浏览器。
+  fetch('/api/ui', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch || {}),
+  }).catch(() => {});
+}
 function toggleTheme() {
   const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
   localStorage.setItem('theme', cur);
   applyTheme();
   syncThemeBtn();
+  persistUi({ theme: cur });
   toast(cur === 'dark' ? '已切到深色' : '已切到浅色');
 }
 

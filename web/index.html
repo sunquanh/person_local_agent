@@ -79,7 +79,7 @@
 <script src="/vendor/markdown-it.min.js"></script>
 <script src="/vendor/highlight.min.js"></script>
 </head>
-<body>
+<body class="hide-right">
 <div id="app">
   <div id="netBanner" class="hidden"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 2.4 17.9a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17.01h.01"/></svg> 与本地服务断开，正在重连…</div>
   <aside id="sidebar">
@@ -139,8 +139,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>导出
       </button>
       </div>
-      <button id="btnPanel" class="btn ghost small" title="显示/隐藏检查器（Ctrl+J）" aria-expanded="true" aria-label="检查器">
+      <button id="btnPanel" class="btn ghost small" title="显示/隐藏检查器（Ctrl+J）" aria-expanded="false" aria-label="检查">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
+        <span class="btn-label">检查</span>
       </button>
       <div class="ch-more">
         <button id="btnMore" class="btn ghost small" title="更多操作" aria-haspopup="true" aria-expanded="false" aria-label="更多操作"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
@@ -183,6 +184,13 @@
     <footer id="inputBar">
       <div id="slashMenu" class="hidden"></div>
       <div id="attachStrip" class="attach-strip hidden"></div>
+      <div class="input-hint">
+        <label class="mode"><input type="checkbox" id="askMode"> 只读模式</label>
+        <span id="permLabel" class="hint-chip" title="与设置里的审批档位一致">权限：读取中</span>
+        <span id="wdLabel" class="hint-chip" title=""></span>
+        <span id="scopeNote" class="hint-chip scope">模型请求的数据范围取决于模型地址</span>
+        <span id="uploadHint" class="muted"></span>
+      </div>
       <div class="input-row">
         <select id="modelSel" class="model-inline" title="临时切换模型（仅本会话生效，用于对比/降级）">
           <option value="">默认模型</option>
@@ -196,13 +204,6 @@
         <button id="btnSend" class="btn primary" title="发送">
           <svg id="icSend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
         </button>
-      </div>
-      <div class="input-hint">
-        <label class="mode"><input type="checkbox" id="askMode"> 只读模式</label>
-        <span id="permLabel" class="hint-chip" title="与设置里的审批档位一致">权限：读取中</span>
-        <span id="wdLabel" class="hint-chip" title=""></span>
-        <span id="scopeNote" class="hint-chip scope">模型请求的数据范围取决于模型地址</span>
-        <span id="uploadHint" class="muted"></span>
       </div>
       <input type="file" id="fileInput" multiple hidden>
     </footer>
