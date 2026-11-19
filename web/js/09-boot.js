@@ -185,10 +185,16 @@ fetch('/api/health').then((r) => r.json()).then((d) => {
   if (!d || !d.ok) return;
   state.ctxLimit = Number(d.context_window) || 0;
   state.isLoopback = d.is_loopback !== false;
+  paintScope(d);
   $('#sbStatus').innerHTML =
     `<div class="st-name">${esc((d.model || {}).name || '未配置模型')}</div>` +
     `<div class="st-ws" title="${esc(d.workspace || '')}">${esc(d.workspace || '')}</div>`;
 }).catch(() => {});
+fetch('/api/settings').then((r) => r.json()).then((d) => {
+  state.profile = ((d || {}).security || {}).profile || state.profile || '';
+  paintPerm();
+}).catch(() => {});
+if ($('#askMode')) $('#askMode').addEventListener('change', () => paintPerm());
 // 欢迎页建议：动态生成的用 data-i（wChipActions），静态兜底用 data-q
 const wChipsEl = $('#wChips');
 if (wChipsEl) wChipsEl.addEventListener('click', (e) => {

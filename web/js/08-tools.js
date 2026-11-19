@@ -473,17 +473,25 @@ async function batchCreate() {
 function batchItemsHtml(j) {
   const items = j.items || [];
   const stIco = { done: ico('check'), failed: ico('x'), running: ico('clock'),
-                   pending: ico('circle'), canceled: ico('stop') };
+                   pending: ico('circle'), canceled: ico('stop'),
+                   skipped: ico('check'), uncertain: ico('warn') };
+  const stTx = { done: '成功', failed: '失败', running: '执行中', pending: '排队',
+                 canceled: '已取消', skipped: '跳过', uncertain: '不确定' };
   return items.map((it) => {
     const arts = (it.artifacts || []).filter(Boolean).map((rel) =>
-      `<a href="/api/file?path=${encodeURIComponent(rel)}" target="_blank">${esc(rel.split('/').pop())}</a>`).join(' ');
-    const body = (it.response || it.error)
-      ? `<details class="bj-res"><summary>结果</summary><pre>${esc(it.response || it.error)}</pre>` +
-        (arts ? `<div class="bj-arts">产物：${arts}</div>` : '') + `</details>`
+      `<a href="/api/file?path=${encodeURIComponent(rel)}" data-pv="${esc(rel)}" target="_blank">${esc(rel)}</a>`).join(' ');
+    const body = (it.response || it.error || arts)
+      ? `<details class="bj-res"><summary>明细</summary>` +
+        `<div class="bj-arts">目标：${esc(it.file || '')}</div>` +
+        (arts ? `<div class="bj-arts">输出：${arts}</div>` : '<div class="bj-arts">输出：尚无产物</div>') +
+        (it.error ? `<pre>${esc(it.error)}</pre>` : '') +
+        (it.response ? `<pre>${esc(it.response)}</pre>` : '') +
+        `</details>`
       : '';
     return `<div class="bj-item ${esc(it.status)}">
         <span class="bj-i-st">${stIco[it.status] || '○'}</span>
-        <span class="bj-i-nm" title="${esc(it.file)}">${esc(it.file.split('/').pop())}</span>
+        <span class="bj-i-st-tx">${esc(stTx[it.status] || it.status || '')}</span>
+        <span class="bj-i-nm" title="${esc(it.file)}">${esc(it.file || '')}</span>
         ${it.error ? `<span class="bj-i-err" title="${esc(it.error)}">${esc(it.error.slice(0, 60))}</span>` : ''}
         <span class="bj-i-t muted">${it.elapsed ? it.elapsed + 's' : ''}</span>
       </div>${body}`;
@@ -492,25 +500,14 @@ function batchItemsHtml(j) {
 
 function batchCardHtml(j) {
   const c = j.counts || {}, total = j.total || 0;
-  const fin = (c.done || 0) + (c.failed || 0) + (c.canceled || 0);
-  const pct = total ? Math.round(fin / total * 100) : 0;
+  const fin = (c.done || 0) + (c.failed || 0) + (c.canceled || 0)
+    + (c.skipped || 0) + (c.uncertain || 0);
   const current = (j.items || []).find((it) => it.status === 'running');
-  const durations = (j.items || []).filter((it) => it.status === 'done' && Number(it.elapsed) > 0)
-    .map((it) => Number(it.elapsed));
-  const avgSeconds = durations.length
-    ? durations.reduce((sum, n) => sum + n, 0) / durations.length : 0;
-  const pending = Math.max(0, total - fin - (c.running || 0));
-  const etaSeconds = Math.ceil(avgSeconds * pending);
-  const etaLabel = avgSeconds
-    ? (etaSeconds >= 3600 ? `${Math.floor(etaSeconds / 3600)}小时${Math.ceil((etaSeconds % 3600) / 60)}分`
-      : etaSeconds >= 60 ? `${Math.floor(etaSeconds / 60)}分${etaSeconds % 60}秒`
-      : `${etaSeconds}秒`)
-    : '';
-  const stTxt = { running: '运行中', paused: '已暂停', done: '已完成', canceled: '已取消' }[j.status] || j.status;
+  const stTxt = { running: '执行中', paused: '已暂停', done: '完成', canceled: '已取消' }[j.status] || j.status;
   const canPause = j.status === 'running';
   const canResume = j.status === 'paused';
   const canCancel = j.status === 'running' || j.status === 'paused';
-  const canRetry = (c.failed || 0) + (c.canceled || 0) > 0;
+  const canRetry = (c.failed || 0) > 0;
   const open = batchState.expanded.has(j.id);
   return `<div class="bj-card" data-id="${esc(j.id)}">
     <div class="bj-head">
@@ -519,10 +516,9 @@ function batchCardHtml(j) {
       <span class="muted">${total} 项 · 完成 ${c.done || 0}${(c.failed || 0) ? ` · 失败 ${c.failed}` : ''}</span>
       <span class="muted bj-when">${esc(j.created_at || '')}</span>
     </div>
-    <div class="bj-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="批量作业完成进度"><i style="width:${pct}%"></i></div>
-    ${j.status === 'running' ? `<div class="bj-progress-note">${current
-      ? `正在处理 ${esc(current.file.split('/').pop())} · ${fin}/${total} 项已完成`
-      : `已完成 ${fin}/${total} 项`}${etaLabel ? ` · 预计还需约 ${etaLabel}` : ' · 收集首项耗时后估算剩余时间'}</div>` : ''}
+    <div class="bj-rule">${esc(j.overwrite_rule || '结果写入 outputs/日期/作业名/，不覆盖输入。只重试失败项，已取消的项不会重跑。')}${j.output_dir ? ' 输出目录 ' + esc(j.output_dir) : ''}${(j.excluded || []).length ? ` · 已排除 ${j.excluded.length} 个自身输出或台账` : ''}</div>
+    <div class="bj-counts">已结束 ${fin}/${total} · 成功 ${c.done || 0} · 失败 ${c.failed || 0} · 取消 ${c.canceled || 0}${(c.skipped || c.uncertain) ? ` · 跳过 ${c.skipped || 0} · 不确定 ${c.uncertain || 0}` : ''}</div>
+    ${j.status === 'running' && current ? `<div class="bj-progress-note">正在处理 ${esc(current.file)} · 已结束 ${fin}/${total}</div>` : ''}
     ${j.note ? `<div class="bj-note">${esc(j.note)}</div>` : ''}
     <div class="bj-ops">
       ${canPause ? '<button class="btn small" data-act="pause">暂停</button>' : ''}
@@ -598,7 +594,7 @@ const PALETTE = [
   { icon: 'upload', label: '导出当前会话（Markdown）', kw: 'export 导出 备份', run: () => $('#btnExport').click() },
   { icon: 'globe', label: '导出当前会话（网页 HTML）', kw: 'html 网页 导出 export', run: () => exportHtml() },
   { icon: 'moon', label: '切换主题（深/浅色）', kw: 'theme 主题 深色 浅色 dark light', run: () => toggleTheme() },
-  { icon: 'shield', label: '切换只读模式', kw: 'readonly 只读 安全', run: () => { const c = $('#askMode'); c.checked = !c.checked; toast(c.checked ? '🛡 已开启只读模式（AI 不能写文件/执行命令）' : '只读模式已关闭'); } },
+  { icon: 'shield', label: '切换只读模式', kw: 'readonly 只读 安全', run: () => { const c = $('#askMode'); c.checked = !c.checked; paintPerm(); toast(c.checked ? '已开启只读模式（AI 不能写文件/执行命令）' : '只读模式已关闭'); } },
   { icon: 'stop', label: '停止当前任务', kw: 'stop 停止 中止 中断', run: () => { if (state.busy) stopRun(); else toast('当前没有运行中的任务'); } },
   { icon: 'box', label: '批量作业（一个目录一次跑完）', kw: 'batch 作业 批量 job 合同', run: () => openBatch() },
 ];

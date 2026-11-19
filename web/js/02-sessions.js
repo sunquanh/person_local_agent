@@ -159,6 +159,10 @@ async function selectSession(id, isNew) {
   try { localStorage.setItem('lastSession', id); } catch (e) {}
   if (state.selectMode) exitSelectMode();
   showWelcome(false);
+  if (!state.busy && typeof paintTask === 'function') {
+    state.task = { status: 'idle', action: '', startedAt: 0, updatedAt: 0 };
+    paintTask();
+  }
   closeCtxMenu();
   showSkeleton();          // 骨架屏：避免“点了没反应”
   renderModelSel();        // 会话级临时模型：恢复该会话的选择

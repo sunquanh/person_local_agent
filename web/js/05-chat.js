@@ -305,6 +305,7 @@ async function send(overrideText, overrideAtts, opts) {
   // 而不是等会话创建/首个反馈帧才可终止（用户之前遇到"只能等 AI 回复"）。
   state.busy = true;
   setBusyUI(true);
+  setTask('running', '正在提交任务');
   // 首次发送时请求通知权限（用户手势内，浏览器才允许）
   if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
     try { Notification.requestPermission(); } catch (e) {}
@@ -502,7 +503,9 @@ async function send(overrideText, overrideAtts, opts) {
       } else {
         // 排队中取消/未收到任何内容：气泡给出明确提示，不留空白
         contentDiv.innerHTML = '';
-        contentDiv.textContent = stopFlag ? '⏹️ 已停止' : '⏹️ 已取消（未开始执行）';
+        contentDiv.textContent = stopFlag
+          ? '已请求停止。若任务仍在执行，状态会显示为停止中或结果不确定。'
+          : '⏹️ 已取消（未开始执行）';
         if (!stopFlag) toast('⏹️ 已取消');
       }
     } else {
@@ -559,6 +562,7 @@ function handleFrame(f, botEl, thinkEl, ctx) {
   if (f.type !== 'queued' && ctx && ctx.clearWait) ctx.clearWait();
   switch (f.type) {
     case 'queued': {
+      setTask('queued', `排队第 ${f.position} 位，等待当前任务结束`);
       // 排队可视化：显示位置 + 可取消（取消 = 断开连接，服务端死连接检测自动退出排队）
       const bar = $('#queueBar');
       if (bar) {
@@ -576,9 +580,15 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       break;
     }
     case 'delta':
+      if (state.task && state.task.status !== 'awaiting_confirm'
+          && state.task.status !== 'stopping') {
+        setTask('running', '正在生成回复');
+      }
       if (ctx && ctx.onDelta) ctx.onDelta(f.text);
       break;
     case 'tool_start': {
+      const label = (typeof TOOL_LABELS !== 'undefined' && TOOL_LABELS[f.name]) || f.name || '工具';
+      setTask('running', `正在${label}`);
       // 工具开始执行：立即出现“⏳ 正在读取 …”，不用等执行完
       $('#queueBar').classList.add('hidden');
       addToolStart(botEl, f.name, f.args);
@@ -595,6 +605,7 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       break;
     }
     case 'ask': {
+      setTask('awaiting_confirm', '等待你的回答');
       // 切走后提问卡会画进已摘除的气泡、用户看不见：跳过渲染，
       // 服务端 ask 超时后按未回答继续（confirm 走全局弹窗，不受影响）。
       if (ctx && ctx.isStale && ctx.isStale()) break;
@@ -603,6 +614,7 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       break;
     }
     case 'confirm': {
+      setTask('awaiting_confirm', '等待确认：' + String(f.command || '').slice(0, 80));
       state.pendingConfirm = f.command;
       $('#queueBar').classList.add('hidden');
       showConfirm(f.command);
@@ -671,6 +683,10 @@ function handleFrame(f, botEl, thinkEl, ctx) {
         botEl.insertAdjacentHTML('beforeend', changeCardHtml(f.snapshot));
       }
       $('#queueBar').classList.add('hidden');
+      if (state.task && state.task.status !== 'uncertain') {
+        setTask(f.stopped ? 'stopped' : 'done',
+                f.stopped ? '任务已停止' : '本轮完成');
+      }
       a11ySay(f.stopped ? '回复已停止' : '回复完成'
                + (f.elapsed_s != null ? `，用时 ${f.elapsed_s} 秒` : ''));
       break;
@@ -719,6 +735,7 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       break;
     }
     case 'error': {
+      setTask('failed', String(f.message || '任务失败').slice(0, 120));
       a11ySay('任务出错：' + String(f.message || '').slice(0, 120));
       botEl.querySelectorAll('.tl-row.running').forEach((r) => {
         r.classList.remove('running');

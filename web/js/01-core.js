@@ -47,6 +47,10 @@ const state = {
   mcpList: [],        // 当前 MCP 服务状态（设置页表单回填用）
   mcpEditing: null,   // 正编辑的 MCP 服务名（null=新增）
   wsRoot: '',         // 工作台根目录（MCP 一键模板默认路径用）
+  modelName: '',
+  modelBase: '',
+  profile: '',
+  task: { status: 'idle', action: '', startedAt: 0, updatedAt: 0 },
   isLoopback: true,   // 是否在本机打开（远程访问时「打开目录/用系统程序打开」无效，隐藏）
   editIdx: null,      // 「编辑上一条/编辑后重发」：发送时先从该条起截断对话
 };

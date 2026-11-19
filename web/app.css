@@ -84,15 +84,15 @@ input,select,textarea{font:inherit;color:var(--text)}
 ::-webkit-scrollbar-track{background:transparent}
 
 /* ── 侧栏 ── */
-#sidebar{width:var(--sb-w,264px);min-width:200px;background:var(--panel2);
+#sidebar{width:var(--sb-w,248px);min-width:200px;background:var(--bg);
   border-right:1px solid var(--border);
   display:flex;flex-direction:column}
 .sb-head{padding:20px 14px 12px;display:flex;flex-direction:column;gap:13px}
 .logo{display:flex;align-items:center;gap:10px;padding:2px 4px}
-.logo-mark{width:28px;height:28px;border-radius:10px;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;
+.logo-mark{width:26px;height:26px;border-radius:8px;
+  background:var(--accent-strong);color:#fff;
   display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:700;
-  letter-spacing:.04em;flex:none;box-shadow:0 4px 12px -2px rgba(78,123,255,.5)}
+  letter-spacing:.04em;flex:none}
 .logo-mark svg{width:18px;height:18px}
 .logo-txt{font-weight:700;font-size:14.5px;letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .icbtn{border:none;background:none;color:var(--muted);width:32px;height:32px;border-radius:10px;
@@ -540,7 +540,9 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 #btnStop{flex:none;height:42px;border-radius:50%;padding:0 14px;font-size:13px;
   box-shadow:0 6px 16px -4px rgba(240,82,93,.55)}
 #btnStop.hidden{display:none}
-.input-hint{display:flex;gap:16px;align-items:center;margin:10px auto 0;max-width:800px;min-height:18px}
+.input-hint{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:10px auto 0;max-width:860px;min-height:18px}
+.hint-chip{font-size:12px;color:var(--muted);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hint-chip.scope{flex:1 0 220px;white-space:normal;line-height:1.45}
 .mode{font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
 .mode input[type=checkbox]{appearance:none;width:32px;height:18px;border-radius:10px;background:var(--border2);
   position:relative;cursor:pointer;transition:background .18s;margin:0;flex:none}
@@ -993,8 +995,15 @@ body.resizing *{transition:none!important}
   user-select:none;font-weight:500}
 .timeline[open] summary{border-bottom:1px dashed var(--border)}
 .tl-body{padding:4px 11px 7px}
-.tl-row{display:flex;align-items:baseline;gap:7px;padding:3px 0;font-size:11.5px;
+.tl-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:7px;padding:3px 0;font-size:11.5px;
   color:var(--muted);min-width:0}
+.tl-sum{display:flex;align-items:baseline;gap:7px;flex:1;min-width:0;border:0;background:none;
+  padding:0;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.tl-detail{flex:1 0 100%;margin:2px 0 6px;padding:8px 10px;max-height:200px;overflow:auto;
+  background:var(--code-bg);border:1px solid var(--border);border-radius:8px;
+  white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.5;color:var(--text)}
+.tl-row.ok .tl-ico{color:var(--ok-text)}
+.tl-row.err .tl-ico{color:var(--err-text)}
 .tl-ico{flex:none;width:14px;display:inline-flex;align-items:center;color:var(--muted)}
 .tool-line.ok .tl-ico{color:var(--ok-text)}
 .tool-line.err .tl-ico{color:var(--err-text)}
@@ -1078,6 +1087,23 @@ body.resizing *{transition:none!important}
 /* 本轮改动弹窗里的 diff 体：长行横向滚动（旧版无此规则，长行会溢出弹窗）；纵向走 #modalBody 的滚动 */
 #modalBody .diff-body{overflow-x:auto}
 
+/* ── 任务状态条：只展示有依据的状态、动作、耗时，不用进度百分比 ── */
+.task-strip{display:flex;align-items:center;gap:10px;margin:8px 22px 0;padding:7px 12px;
+  border:1px solid var(--border);border-radius:10px;background:var(--panel);font-size:12.5px;min-width:0}
+.task-state{flex:none;font-weight:650;letter-spacing:.02em}
+.task-strip[data-status="queued"] .task-state,
+.task-strip[data-status="running"] .task-state{color:var(--accent-h)}
+.task-strip[data-status="awaiting_confirm"] .task-state,
+.task-strip[data-status="stopping"] .task-state,
+.task-strip[data-status="uncertain"] .task-state{color:var(--warn-text)}
+.task-strip[data-status="failed"] .task-state{color:var(--err-text)}
+.task-strip[data-status="done"] .task-state,
+.task-strip[data-status="stopped"] .task-state{color:var(--ok-text)}
+.task-action{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.task-time{flex:none;font-variant-numeric:tabular-nums}
+.bj-rule,.bj-counts{font-size:12px;color:var(--muted);margin:4px 0 2px;line-height:1.45}
+.bj-i-st-tx{flex:none;font-size:11px;color:var(--muted)}
+
 /* ── 桌面优先：收起右侧检查器 / 左侧会话栏后，缩窄窗口仍可保持可操作 ── */
 body{min-width:720px}
 /* 窄一点的桌面窗口：顶栏动作收进「⋯」，标题不再被挤成 0 宽 */
@@ -1131,6 +1157,8 @@ body{min-width:720px}
   #sidebar{width:210px;min-width:180px}
   #messages{padding:26px 14px 22px}
   #inputBar{padding:10px 12px}
+  .task-strip{margin:8px 12px 0;flex-wrap:wrap}
+  .task-action{flex-basis:100%}
   .ch-actions{gap:6px}
   #chatHead{padding:10px 12px}
 }

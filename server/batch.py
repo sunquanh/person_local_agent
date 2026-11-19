@@ -25,7 +25,7 @@ import uuid
 from pathlib import Path
 
 from agent.logsetup import get
-from agent.workspace import SessionCtx
+from agent.workspace import SessionCtx, sanitize_slug
 
 log = get('batch')
 
@@ -157,6 +157,22 @@ class BatchRunner:
             raise ValueError('没有选择输入文件')
         if len(files) > 200:
             raise ValueError('单个作业最多 200 个文件')
+        day = time.strftime('%Y-%m-%d')
+        slug = sanitize_slug(name, 'job')
+        output_dir = f'outputs/{day}/{slug}/'
+        excluded = []
+        kept = []
+        for f in files:
+            # 作业会把结果写进自己的输出目录。把该目录和 .agent 台账排除，
+            # 避免下一轮把刚写出的文件又当成输入。
+            if (f.startswith('.agent/') or '/.agent/' in f
+                    or f.startswith(output_dir)):
+                excluded.append(f)
+                continue
+            kept.append(f)
+        files = kept
+        if not files:
+            raise ValueError('没有可处理的输入文件（已排除作业自身输出和 .agent）')
         # 逐个校验：必须是工作台内可读的真实文件
         for f in files:
             if f.startswith('/') or '..' in f.split('/') or re.match(r'^[A-Za-z]:', f):
@@ -179,6 +195,10 @@ class BatchRunner:
             'note': '',
             'created_at': now,
             'done_at': '',
+            'output_dir': output_dir,
+            'overwrite_rule': ('结果写入该输出目录，不覆盖输入文件。'
+                               '只重试失败项；已取消的项不会重跑。'),
+            'excluded': excluded,
             'items': [{
                 'idx': i, 'file': f, 'status': 'pending',
                 'elapsed': 0.0, 'error': '', 'response': '', 'artifacts': [],
@@ -219,12 +239,14 @@ class BatchRunner:
                     except Exception:
                         pass
             elif action == 'retry':
+                # 只重试明确失败的项。取消不是失败，不能直接再跑一遍。
                 n = 0
                 for it in job['items']:
-                    if it['status'] in ('failed', 'canceled'):
-                        it['status'] = 'pending'
-                        it['error'] = ''
-                        n += 1
+                    if it['status'] != 'failed':
+                        continue
+                    it['status'] = 'pending'
+                    it['error'] = ''
+                    n += 1
                 if n:
                     job['status'] = 'running'
                     job['note'] = ''

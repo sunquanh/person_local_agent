@@ -30,6 +30,7 @@ from agent.llm import LLMClient, LLMError
 from agent.memory import Memory
 from agent.workspace import Workspace
 from server.batch import BatchRunner, valid_job_id
+from server.runs import ModelGate
 from server.sessions import SessionManager
 
 log = logsetup.get('http')
@@ -312,6 +313,13 @@ class AgentServer:
         self.rag = Rag(w.get('root', '') or str(self.ws.root))
         self.memory = Memory(str(self.ws.root / '.agent' / 'memory.db'))
         self.sessions = SessionManager(str(self.ws.root / '.agent'))
+        try:
+            slots = int(limits.get('model_slots', 1) or 1)
+        except (TypeError, ValueError):
+            slots = 1
+        # 交互、批量、记忆共用一个模型槽。批量代码会 acquire('batch')，
+        # 这里必须先挂上，否则作业一启动就是 AttributeError。
+        self.gate = ModelGate(slots)
         self.batch = BatchRunner(self)   # 批量作业（B8）：单 worker 串行执行
         # MCP 客户端（B5）：按 config.mcp.servers 拉起子进程（失败只影响对应 server）
         try:
@@ -2206,7 +2214,15 @@ class Handler(BaseHTTPRequestHandler):
             run_t0 = time.monotonic()
 
             def run_agent():
+                held = False
                 try:
+                    # 与批量作业共用模型槽：交互优先，拿不到槽就不跑第二遍。
+                    held = app.gate.acquire(
+                        'chat', timeout=app.chat_timeout_s,
+                        stop=lambda: agent.stop_requested())
+                    if not held:
+                        result_box['e'] = '未获得模型槽位（已停止或等待超时）'
+                        return
                     result_box['r'] = agent.run(history, user_input, mode=mode)
                     result_box['ok'] = True
                 except LLMError as e:
@@ -2216,6 +2232,11 @@ class Handler(BaseHTTPRequestHandler):
                     result_box['e'] = f'{type(e).__name__}: {e}'
                     log.exception('对话失败: %s', e)
                 finally:
+                    if held:
+                        try:
+                            app.gate.release()
+                        except Exception:
+                            pass
                     release_busy()
                     r = result_box.get('r')
                     app._jobs.insert(0, {

@@ -45,18 +45,20 @@ function toolRowHtml(name, args, ok, ms) {
   const srvTag = mi
     ? `<span class="tl-srv" title="MCP 服务：${esc(mi.server)}">${esc(mi.server)}</span>` : '';
   return `<div class="tl-row ${cls}" data-name="${esc(name)}">` +
+    `<button type="button" class="tl-sum" title="展开命令、输出或错误">` +
     `<span class="tl-ico">${mark}</span>` +
     `<span class="tl-name">${srvTag}${esc(label)}</span>` +
     `<span class="tl-arg">${esc(toolBrief(name, args))}</span>` +
     `<span class="tl-ms">${esc(fmtMs(ms))}</span>` +
-    `<span class="tl-res"></span></div>`;
+    `<span class="tl-res"></span></button>` +
+    `<pre class="tl-detail hidden"></pre></div>`;
 }
 function ensureTimeline(botEl) {
   let d = botEl.querySelector('.timeline');
   if (!d) {
     d = document.createElement('details');
     d.className = 'timeline';
-    d.open = true;
+    d.open = false;
     d.innerHTML = '<summary></summary><div class="tl-body"></div>';
     const acts = botEl.querySelector('.msg-acts');
     if (acts) botEl.insertBefore(d, acts); else botEl.appendChild(d);
@@ -102,7 +104,9 @@ function finishTool(botEl, name, ok, result, ms) {
   const text = String(result || '').replace(/\s+/g, ' ').trim();
   if (text) {
     res.textContent = text.slice(0, 70) + (text.length > 70 ? '…' : '');
-    res.title = String(result || '');
+    res.title = '点击展开完整输出';
+    const det = row.querySelector('.tl-detail');
+    if (det) det.textContent = String(result || '');
   }
   if (result) {
     const btn = document.createElement('button');
@@ -130,7 +134,9 @@ function renderTimeline(botEl, steps) {
     if (text) {
       const res = row.querySelector('.tl-res');
       res.textContent = text.slice(0, 70) + (text.length > 70 ? '…' : '');
-      res.title = String(s.result || '');
+      res.title = '点击展开完整输出';
+      const det = row.querySelector('.tl-detail');
+      if (det) det.textContent = String(s.result || '');
     }
   });
   refreshTimeline(botEl);

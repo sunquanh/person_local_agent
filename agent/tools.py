@@ -114,13 +114,31 @@ def _read_text_best_effort(p: Path):
 
 
 class ToolResult:
-    def __init__(self, text: str, artifacts=None, image=None):
-        self.text = text
+    def __init__(self, text: str, artifacts=None, image=None, ok=None,
+                 code='', hint=''):
+        self.text = '' if text is None else str(text)
         self.artifacts = list(artifacts or [])
         self.image = image        # 图片绝对路径（多模态模型用）
+        self.code = str(code or '')
+        self.hint = str(hint or '')
+        if ok is None:
+            head = self.text.lstrip()
+            # 成功不靠文案猜测；只有明确的失败/拒绝/超时前缀算失败。
+            self.ok = not (head.startswith('❌') or head.startswith('⛔')
+                           or head.startswith('⏱️'))
+        else:
+            self.ok = bool(ok)
+
+    @classmethod
+    def fail(cls, text, code='', hint=''):
+        text = '' if text is None else str(text)
+        if not (text.startswith('❌') or text.startswith('⛔')):
+            text = '❌ ' + text
+        return cls(text, ok=False, code=code, hint=hint)
 
     def to_dict(self):
-        return {"text": self.text, "artifacts": self.artifacts}
+        return {"text": self.text, "artifacts": self.artifacts,
+                "ok": self.ok, "code": self.code}
 
 
 def _safe_name(name: str) -> str:
