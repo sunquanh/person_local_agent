@@ -60,6 +60,28 @@ def abspath_from_program(program_dir, path):
     return os.path.abspath(os.path.join(os.path.abspath(program_dir), text))
 
 
+def portable_path(program_dir, root):
+    """落盘形态：工作目录在程序目录内就存相对路径，整个文件夹拷走仍有效；
+    在程序目录外存绝对路径（跨盘相对路径不可靠）。"""
+    prog = os.path.abspath(program_dir)
+    target = os.path.abspath(root)
+    try:
+        rel = os.path.relpath(target, prog)
+    except ValueError:
+        return target
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return target
+    return rel
+
+
+def _stored_config(config, program_dir, root):
+    """写盘用的 config 副本：workspace.root 换成 portable 形态，
+    内存里的 config 保持绝对路径不变。"""
+    stored = json.loads(json.dumps(config))
+    stored.setdefault('workspace', {})['root'] = portable_path(program_dir, root)
+    return stored
+
+
 def pointer_path(program_dir):
     return os.path.join(os.path.abspath(program_dir), '.workspace-root')
 
@@ -76,13 +98,13 @@ def read_pointer(program_dir):
 
 
 def write_pointer(program_dir, workspace_root):
-    """只写绝对路径，不写配置正文，避免把密钥留在程序目录。"""
+    """只写路径（程序目录内为相对路径），不写配置正文，避免把密钥留在程序目录。"""
     path = pointer_path(program_dir)
     parent = os.path.dirname(path)
     os.makedirs(parent, exist_ok=True)
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
-        f.write(os.path.abspath(workspace_root) + '\n')
+        f.write(portable_path(program_dir, workspace_root) + '\n')
     os.replace(tmp, path)
 
 
@@ -129,7 +151,7 @@ def prepare_launch(program_dir, config_arg=None, workspace_arg=None):
     """决定工作目录和本轮要读的配置。
 
     工作目录优先级：--workspace、显式 --config 里的 workspace.root、
-    .workspace-root、程序目录旧 config.json、~/我的工作台。
+    .workspace-root、程序目录旧 config.json、程序目录下的 work。
     """
     program_dir = os.path.abspath(program_dir)
     explicit_path = None
@@ -154,7 +176,7 @@ def prepare_launch(program_dir, config_arg=None, workspace_arg=None):
             if legacy:
                 rel = str((_read_json(legacy).get('workspace') or {}).get('root') or '')
             root = (abspath_from_program(program_dir, rel) if rel
-                    else os.path.join(os.path.expanduser('~'), '我的工作台'))
+                    else os.path.join(program_dir, 'work'))
 
     _ensure_workspace(root)
     live = os.path.join(root, '.agent', 'config.json')
@@ -164,7 +186,8 @@ def prepare_launch(program_dir, config_arg=None, workspace_arg=None):
         config = explicit_cfg
         if not os.path.isfile(live):
             copied = json.loads(json.dumps(explicit_cfg))
-            copied.setdefault('workspace', {})['root'] = root
+            copied.setdefault('workspace', {})['root'] = \
+                portable_path(program_dir, root)
             _write_json(live, copied)
     elif os.path.isfile(live):
         config = _read_json(live)
@@ -193,11 +216,11 @@ def prepare_launch(program_dir, config_arg=None, workspace_arg=None):
     else:
         config = _defaults()
         config['workspace']['root'] = root
-        _write_json(live, config)
+        _write_json(live, _stored_config(config, program_dir, root))
 
     config.setdefault('workspace', {})['root'] = root
     if explicit_cfg is None:
-        _write_json(live, config)
+        _write_json(live, _stored_config(config, program_dir, root))
     write_pointer(program_dir, root)
     return Launch(root, live, config, explicit_path)
 

@@ -900,7 +900,13 @@ class AgentServer:
         if not paths:
             return
         import tempfile
-        payload = json.dumps(self.config, ensure_ascii=False, indent=2)
+        stored = json.loads(json.dumps(self.config))
+        _root = str((stored.get('workspace') or {}).get('root') or '')
+        if _root and getattr(self, 'program_dir', None):
+            from server.storepath import portable_path
+            stored.setdefault('workspace', {})['root'] = \
+                portable_path(self.program_dir, _root)
+        payload = json.dumps(stored, ensure_ascii=False, indent=2)
         # 先备份每路旧内容（不存在记 None，恢复时删除）；读失败直接
         # 中止，此时还没动过任何一路，不会留下半新半旧。
         backups = {}
@@ -1969,6 +1975,9 @@ class Handler(BaseHTTPRequestHandler):
                 wsr = str((d.get('workspace') or {}).get('root') or '').strip()
                 if wsr:
                     try:
+                        if self.app.program_dir:
+                            from server.storepath import abspath_from_program
+                            wsr = abspath_from_program(self.app.program_dir, wsr)
                         cand = Workspace(wsr)
                     except (ValueError, PermissionError) as e:
                         return self._err(400, f'工作台路径无效: {e}')
