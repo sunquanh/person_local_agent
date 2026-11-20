@@ -1,6 +1,6 @@
 :root{
   --bg:#f3f4f6; --panel:#ffffff; --panel2:#f7f8fa; --panel3:#eef0f3;
-  --text:#1c2333; --muted:#667085;
+  --text:#1c2333; --muted:#5b6474;
   /* 状态色分两套：--ok/--err 给点、条、边框（可以鲜艳）；
      --ok-text/--err-text 只给文字，保证在 panel/panel2/panel3 上都 ≥4.5:1 */
   --ok-text:#0b6f52; --err-text:#c92a37; --danger-solid:#c92a37;
@@ -355,7 +355,7 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .rp-empty-ic svg{width:30px;height:30px}
 .rp-empty p{margin:0 0 6px}
 .rp-empty b{color:var(--text);font-weight:600}
-.rp-empty .rp-empty-tip{font-size:var(--fs-xs);opacity:.85;margin-top:10px}
+.rp-empty .rp-empty-tip{font-size:var(--fs-xs);margin-top:10px}
 
 /* ── 右栏检查器 Tab：任务/工具/产物三选一，不再互相争高度 ── */
 #rpTabs{display:flex;gap:4px;flex:none}
@@ -688,7 +688,7 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
   box-shadow:var(--shadow-md);animation:fadeIn .15s ease;
   display:flex;align-items:center;gap:8px}
 #toast svg.ic{width:15px;height:15px;flex:none;opacity:.9}
-#toast.err{background:var(--err)}
+#toast.err{background:var(--danger-solid)}
 
 /* ── 侧栏收放（Ctrl+B / Ctrl+J）── */
 body.hide-left #sidebar{display:none}
@@ -703,7 +703,7 @@ body.resizing{user-select:none;-webkit-user-select:none;cursor:col-resize}
 body.resizing *{transition:none!important}
 
 /* ── 顶部断连横幅 ── */
-#netBanner{position:fixed;top:0;left:0;right:0;z-index:97;background:var(--err);color:#fff;
+#netBanner{position:fixed;top:0;left:0;right:0;z-index:97;background:var(--danger-solid);color:#fff;
   font-size:12.5px;padding:6px 12px;text-align:center;box-shadow:var(--shadow-md)}
 
 /* ── 骨架屏（切换会话/加载时避免“点了没反应”）── */
