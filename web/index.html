@@ -79,7 +79,7 @@
 <script src="/vendor/markdown-it.min.js"></script>
 <script src="/vendor/highlight.min.js"></script>
 </head>
-<body>
+<body class="hide-right">
 <div id="app">
   <div id="netBanner" class="hidden"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 2.4 17.9a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17.01h.01"/></svg> 与本地服务断开，正在重连…</div>
   <aside id="sidebar">
@@ -139,8 +139,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>导出
       </button>
       </div>
-      <button id="btnPanel" class="btn ghost small" title="显示/隐藏检查器（Ctrl+J）" aria-expanded="true" aria-label="检查器">
+      <button id="btnPanel" class="btn ghost small" title="显示/隐藏检查器（Ctrl+J）" aria-expanded="false" aria-label="检查">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
+        <span class="btn-label">检查</span>
       </button>
       <div class="ch-more">
         <button id="btnMore" class="btn ghost small" title="更多操作" aria-haspopup="true" aria-expanded="false" aria-label="更多操作"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
@@ -158,7 +159,7 @@
     <div id="welcome" class="hidden">
       <div class="w-logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5.2 8.4 3.5 3.6 9.2 5.7C10.2 5 11.1 4.6 12 4.6s1.8.4 2.8 1.1l5.7-2.1-1.7 4.8c2 1.5 3.2 3.6 3.2 5.9 0 4.3-3.6 7.1-10 7.1S2 18.6 2 14.3c0-2.3 1.2-4.4 3.2-5.9Z" fill="#ffffff"/><circle cx="9" cy="12.6" r="1.4" fill="#1b1e2e"/><circle cx="15" cy="12.6" r="1.4" fill="#1b1e2e"/><path d="M11 15.4h2l-1 1.5Z" fill="#1b1e2e"/><path d="M12 16.9c-.3.9-1 1.3-1.8 1.1M12 16.9c.3.9 1 1.3 1.8 1.1" fill="none" stroke="#1b1e2e" stroke-width=".9" stroke-linecap="round"/></svg></div>
       <h2>有什么可以帮你？</h2>
-      <p>本地运行 · 数据不出本机 · 支持文件分析与产出</p>
+      <p>文件和命令在本机执行。对话、附件和读到的内容会发给当前模型地址，不一定留在本机。</p>
       <div id="modelCard" class="model-card hidden">
         <b>还没连上模型服务</b>
         <span id="modelCardMsg" class="muted"></span>
@@ -172,12 +173,24 @@
       </div>
     </div>
 
+    <div id="taskStrip" class="task-strip hidden" aria-live="polite">
+      <span id="taskState" class="task-state">空闲</span>
+      <span id="taskAction" class="task-action"></span>
+      <span id="taskTime" class="task-time muted"></span>
+    </div>
     <div id="queueBar" class="hidden"><span id="queueText"></span><button id="btnCancelQueue" class="btn ghost small"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg> 取消排队</button></div>
     <div id="runBanner" class="hidden">上一轮仍在后台运行，完成后自动刷新本会话</div>
 
     <footer id="inputBar">
       <div id="slashMenu" class="hidden"></div>
       <div id="attachStrip" class="attach-strip hidden"></div>
+      <div class="input-hint">
+        <label class="mode"><input type="checkbox" id="askMode"> 只读模式</label>
+        <span id="permLabel" class="hint-chip" title="与设置里的审批档位一致">权限：读取中</span>
+        <span id="wdLabel" class="hint-chip" title=""></span>
+        <span id="scopeNote" class="hint-chip scope">模型请求的数据范围取决于模型地址</span>
+        <span id="uploadHint" class="muted"></span>
+      </div>
       <div class="input-row">
         <select id="modelSel" class="model-inline" title="临时切换模型（仅本会话生效，用于对比/降级）">
           <option value="">默认模型</option>
@@ -191,10 +204,6 @@
         <button id="btnSend" class="btn primary" title="发送">
           <svg id="icSend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
         </button>
-      </div>
-      <div class="input-hint">
-        <label class="mode"><input type="checkbox" id="askMode"> 只读模式</label>
-        <span id="uploadHint" class="muted"></span>
       </div>
       <input type="file" id="fileInput" multiple hidden>
     </footer>
@@ -260,6 +269,7 @@
   </div>
 </div>
 
+<script src="/js/ui-cache.js"></script>
 <script src="/js/01-core.js"></script>
 <script src="/js/02-sessions.js"></script>
 <script src="/js/03-render.js"></script>

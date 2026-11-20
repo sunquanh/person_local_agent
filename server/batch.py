@@ -25,7 +25,7 @@ import uuid
 from pathlib import Path
 
 from agent.logsetup import get
-from agent.workspace import SessionCtx
+from agent.workspace import SessionCtx, sanitize_slug
 
 log = get('batch')
 
@@ -58,6 +58,16 @@ class BatchRunner:
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name='batch-worker')
         self._thread.start()
+
+    def close(self):
+        """停掉后台线程并等它退出。调用方应在删除工作目录之前调用。"""
+        self._stop = True
+        self._wake.set()
+        thread = getattr(self, '_thread', None)
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=5)
+            if thread.is_alive():
+                raise RuntimeError('批量作业线程在停止后仍未退出')
 
     # ── 磁盘读写 ──────────────────────────────────────────────
     def running(self) -> bool:
@@ -157,6 +167,22 @@ class BatchRunner:
             raise ValueError('没有选择输入文件')
         if len(files) > 200:
             raise ValueError('单个作业最多 200 个文件')
+        day = time.strftime('%Y-%m-%d')
+        slug = sanitize_slug(name, 'job')
+        output_dir = f'outputs/{day}/{slug}/'
+        excluded = []
+        kept = []
+        for f in files:
+            # 作业会把结果写进自己的输出目录。把该目录和 .agent 台账排除，
+            # 避免下一轮把刚写出的文件又当成输入。
+            if (f.startswith('.agent/') or '/.agent/' in f
+                    or f.startswith(output_dir)):
+                excluded.append(f)
+                continue
+            kept.append(f)
+        files = kept
+        if not files:
+            raise ValueError('没有可处理的输入文件（已排除作业自身输出和 .agent）')
         # 逐个校验：必须是工作台内可读的真实文件
         for f in files:
             if f.startswith('/') or '..' in f.split('/') or re.match(r'^[A-Za-z]:', f):
@@ -179,6 +205,10 @@ class BatchRunner:
             'note': '',
             'created_at': now,
             'done_at': '',
+            'output_dir': output_dir,
+            'overwrite_rule': ('结果写入该输出目录，不覆盖输入文件。'
+                               '只重试失败项；已取消的项不会重跑。'),
+            'excluded': excluded,
             'items': [{
                 'idx': i, 'file': f, 'status': 'pending',
                 'elapsed': 0.0, 'error': '', 'response': '', 'artifacts': [],
@@ -219,12 +249,24 @@ class BatchRunner:
                     except Exception:
                         pass
             elif action == 'retry':
+                # 只重试明确失败、且没有已落盘输出的项。
+                # 取消、结果不确定、或上次已经写出文件的，不自动再跑。
                 n = 0
                 for it in job['items']:
-                    if it['status'] in ('failed', 'canceled'):
-                        it['status'] = 'pending'
-                        it['error'] = ''
-                        n += 1
+                    if it['status'] != 'failed' or it.get('outcome') in (
+                            'uncertain', 'canceled'):
+                        continue
+                    arts = [a for a in (it.get('artifacts') or []) if a]
+                    if any((self.app.ws.root / a).is_file() for a in arts):
+                        it['status'] = 'skipped'
+                        it['outcome'] = 'skipped'
+                        it['error'] = ('上次已产生输出，未重复写入。'
+                                       '外部命令等无法判定的副作用也不会自动重试。')
+                        continue
+                    it['status'] = 'pending'
+                    it['error'] = ''
+                    it['outcome'] = ''
+                    n += 1
                 if n:
                     job['status'] = 'running'
                     job['note'] = ''
@@ -379,8 +421,17 @@ class BatchRunner:
                 item['status'] = 'canceled'
                 item['error'] = item.get('error') or '已停止'
             elif r.get('stopped'):
-                item['status'] = 'canceled'
-                item['error'] = '已停止'
+                arts = [a.get('rel', '') if isinstance(a, dict) else str(a)
+                        for a in (r.get('artifacts') or [])]
+                item['artifacts'] = [a for a in arts if a]
+                if item['artifacts'] or r.get('stop_uncertain'):
+                    item['status'] = 'uncertain'
+                    item['outcome'] = 'uncertain'
+                    item['error'] = '已停止，但输出或子进程结果不确定，不会自动重试'
+                else:
+                    item['status'] = 'canceled'
+                    item['outcome'] = 'canceled'
+                    item['error'] = '已停止'
             else:
                 item['status'] = 'done'
                 item['response'] = str(r.get('response') or '')[:_KEEP_TEXT]

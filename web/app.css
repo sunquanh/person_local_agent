@@ -1,15 +1,15 @@
 :root{
-  --bg:#f7f9ff; --panel:#ffffff; --panel2:#f2f5ff; --panel3:#e8edff;
-  --text:#1b1e2e; --muted:#5f6685;
+  --bg:#f3f4f6; --panel:#ffffff; --panel2:#f7f8fa; --panel3:#eef0f3;
+  --text:#1c2333; --muted:#667085;
   /* 状态色分两套：--ok/--err 给点、条、边框（可以鲜艳）；
      --ok-text/--err-text 只给文字，保证在 panel/panel2/panel3 上都 ≥4.5:1 */
   --ok-text:#0b6f52; --err-text:#c92a37; --danger-solid:#c92a37;
-  --accent:#4e7bff; --accent2:#8b5cf6; --accent-h:#3d66e8;
-  /* 承载文字的表面色：白字对比度 ≥ 4.5:1（AA）；渐变只留给 logo */
-  --accent-strong:#3b5fd9; --accent-strong-h:#3455c6;
-  --accent-tint:rgba(78,123,255,.10); --accent2-tint:rgba(139,92,246,.10);
-  --border:#e9edf9; --border2:#d9dff5;
-  --bubble:#3f63d9; --bubble2:#8b5cf6;
+  --accent:#1d4f91; --accent2:#1d4f91; --accent-h:#1d4f91;
+  /* 蓝色只用于主按钮和当前项，不再用紫色渐变 */
+  --accent-strong:#1d4f91; --accent-strong-h:#163e73;
+  --accent-tint:rgba(29,79,145,.10); --accent2-tint:rgba(29,79,145,.08);
+  --border:#e6e8ee; --border2:#d0d5dd;
+  --bubble:#ffffff; --bubble2:#ffffff;
   --ok:#10b981; --err:#f0525d; --warn:#f5a623;
   --shadow-sm:0 1px 3px rgba(30,41,90,.06),0 2px 10px rgba(30,41,90,.05);
   --shadow-md:0 6px 22px -6px rgba(60,80,200,.16);
@@ -36,16 +36,16 @@
   --dur:.15s;
 }
 [data-theme="dark"]{
-  --bg:#0b0e19; --panel:#181c2e; --panel2:#212641; --panel3:#2b3157;
-  --text:#edf0fa; --muted:#9aa0be;
+  --bg:#14161c; --panel:#1c1f27; --panel2:#191c24; --panel3:#262a33;
+  --text:#e7e9ee; --muted:#9aa3b2;
   --ok-text:#34d399; --err-text:#f87171;
   --warn-text:#fbbf24;
   --danger-solid:#b32634;
-  --accent:#6c8dff; --accent2:#a78bfa; --accent-h:#89a4ff;
-  --accent-strong:#3f63d9; --accent-strong-h:#4a6ee0;
-  --accent-tint:rgba(108,141,255,.14); --accent2-tint:rgba(167,139,250,.12);
-  --border:#262b47; --border2:#333a61;
-  --bubble:#3f63d9; --bubble2:#8f6cf5;
+  --accent:#8eb4e8; --accent2:#8eb4e8; --accent-h:#d6e4f7;
+  --accent-strong:#2f5f9e; --accent-strong-h:#3d6eaf;
+  --accent-tint:rgba(142,180,232,.16); --accent2-tint:rgba(142,180,232,.10);
+  --border:#2c313c; --border2:#3a4150;
+  --bubble:#262a33; --bubble2:#262a33;
   --toast-bg:rgba(13,16,30,.95);
   --code-bg:#12152a;
   --code-text:#dbe3fb;
@@ -75,7 +75,7 @@ input,select,textarea{font:inherit;color:var(--text)}
   clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* 深色下靠面板色阶区分三栏，不再叠光晕 */
-[data-theme="dark"] body{background-color:#0b0e19}
+[data-theme="dark"] body{background-color:#14161c}
 
 /* 滚动条 */
 ::-webkit-scrollbar{width:7px;height:7px}
@@ -84,15 +84,15 @@ input,select,textarea{font:inherit;color:var(--text)}
 ::-webkit-scrollbar-track{background:transparent}
 
 /* ── 侧栏 ── */
-#sidebar{width:var(--sb-w,264px);min-width:200px;background:var(--panel2);
+#sidebar{width:var(--sb-w,248px);min-width:200px;background:var(--bg);
   border-right:1px solid var(--border);
   display:flex;flex-direction:column}
 .sb-head{padding:20px 14px 12px;display:flex;flex-direction:column;gap:13px}
 .logo{display:flex;align-items:center;gap:10px;padding:2px 4px}
-.logo-mark{width:28px;height:28px;border-radius:10px;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;
+.logo-mark{width:26px;height:26px;border-radius:8px;
+  background:var(--accent-strong);color:#fff;
   display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:700;
-  letter-spacing:.04em;flex:none;box-shadow:0 4px 12px -2px rgba(78,123,255,.5)}
+  letter-spacing:.04em;flex:none}
 .logo-mark svg{width:18px;height:18px}
 .logo-txt{font-weight:700;font-size:14.5px;letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .icbtn{border:none;background:none;color:var(--muted);width:32px;height:32px;border-radius:10px;
@@ -229,12 +229,13 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .msg{position:relative;width:min(780px,100%);animation:fadeIn .18s ease backwards}
 .msg.selectable.user{padding-left:34px}
 @keyframes fadeUp{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
-.msg.user{align-self:flex-end;margin-left:auto;max-width:min(62%,560px);
-  background:var(--bubble);
-  color:#fff;padding:11px 16px 9px;border-radius:18px 18px 6px 18px;
-  box-shadow:var(--shadow-sm);width:auto;min-width:0}
+.msg.user{align-self:flex-end;margin-left:auto;max-width:min(72%,520px);
+  background:var(--panel);color:var(--text);
+  border:1px solid var(--border);
+  padding:11px 16px 9px;border-radius:12px;
+  box-shadow:none;width:auto;min-width:0}
 .msg.user .u-txt{white-space:pre-wrap;word-break:break-word;font-size:14.5px;line-height:1.65}
-.msg.user .u-ts{font-size:11px;line-height:1;color:rgba(255,255,255,.86);text-align:right;margin-top:5px}
+.msg.user .u-ts{font-size:11px;line-height:1;color:var(--muted);text-align:right;margin-top:5px}
 .msg.bot{position:relative;padding-left:48px;animation:fadeUp .3s ease backwards}
 .msg.bot:hover .msg-acts{opacity:1;transform:none}
 /* 消息操作条（复制/重新生成）：hover 显示 */
@@ -245,8 +246,8 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .msg-acts button:hover{color:var(--accent);border-color:var(--accent)}
 /* 用户消息的操作条：常驻在气泡下方（右对齐），不做 hover 才出现；白底在紫色气泡上太重，改半透明 */
 .msg.user .msg-acts{position:static;opacity:1;transform:none;justify-content:flex-end;margin-top:5px}
-.msg.user .msg-acts button{background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.34);color:#fff}
-.msg.user .msg-acts button:hover{background:rgba(255,255,255,.28);border-color:rgba(255,255,255,.6);color:#fff}
+.msg.user .msg-acts button{background:var(--panel2);border-color:var(--border);color:var(--text)}
+.msg.user .msg-acts button:hover{background:var(--panel3);border-color:var(--border2);color:var(--text)}
 .msg.user .act-menu{background:var(--panel);border-color:var(--border)}
 .msg.user .act-menu button{background:none;border:none;color:var(--text)}
 .msg.user .act-menu button:hover{background:var(--panel2);color:var(--accent-h)}
@@ -540,7 +541,9 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 #btnStop{flex:none;height:42px;border-radius:50%;padding:0 14px;font-size:13px;
   box-shadow:0 6px 16px -4px rgba(240,82,93,.55)}
 #btnStop.hidden{display:none}
-.input-hint{display:flex;gap:16px;align-items:center;margin:10px auto 0;max-width:800px;min-height:18px}
+.input-hint{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:10px auto 0;max-width:860px;min-height:18px}
+.hint-chip{font-size:12px;color:var(--muted);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hint-chip.scope{flex:1 0 220px;white-space:normal;line-height:1.45}
 .mode{font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
 .mode input[type=checkbox]{appearance:none;width:32px;height:18px;border-radius:10px;background:var(--border2);
   position:relative;cursor:pointer;transition:background .18s;margin:0;flex:none}
@@ -689,7 +692,7 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .pal-foot{padding:8px 17px;border-top:1px solid var(--border);font-size:11px;letter-spacing:.02em}
 
 /* ── toast ── */
-#toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%);background:var(--toast-bg);color:#fff;
+#toast{position:fixed;left:50%;bottom:108px;transform:translateX(-50%);background:var(--toast-bg);color:#fff;
   padding:10px 18px;border-radius:var(--r-md);z-index:99;font-size:13px;max-width:82%;
   box-shadow:var(--shadow-md);animation:fadeIn .15s ease;
   display:flex;align-items:center;gap:8px}
@@ -993,8 +996,15 @@ body.resizing *{transition:none!important}
   user-select:none;font-weight:500}
 .timeline[open] summary{border-bottom:1px dashed var(--border)}
 .tl-body{padding:4px 11px 7px}
-.tl-row{display:flex;align-items:baseline;gap:7px;padding:3px 0;font-size:11.5px;
+.tl-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:7px;padding:3px 0;font-size:11.5px;
   color:var(--muted);min-width:0}
+.tl-sum{display:flex;align-items:baseline;gap:7px;flex:1;min-width:0;border:0;background:none;
+  padding:0;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.tl-detail{flex:1 0 100%;margin:2px 0 6px;padding:8px 10px;max-height:200px;overflow:auto;
+  background:var(--code-bg);border:1px solid var(--border);border-radius:8px;
+  white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.5;color:var(--text)}
+.tl-row.ok .tl-ico{color:var(--ok-text)}
+.tl-row.err .tl-ico{color:var(--err-text)}
 .tl-ico{flex:none;width:14px;display:inline-flex;align-items:center;color:var(--muted)}
 .tool-line.ok .tl-ico{color:var(--ok-text)}
 .tool-line.err .tl-ico{color:var(--err-text)}
@@ -1078,6 +1088,23 @@ body.resizing *{transition:none!important}
 /* 本轮改动弹窗里的 diff 体：长行横向滚动（旧版无此规则，长行会溢出弹窗）；纵向走 #modalBody 的滚动 */
 #modalBody .diff-body{overflow-x:auto}
 
+/* ── 任务状态条：只展示有依据的状态、动作、耗时，不用进度百分比 ── */
+.task-strip{display:flex;align-items:center;gap:10px;margin:8px 22px 0;padding:7px 12px;
+  border:1px solid var(--border);border-radius:10px;background:var(--panel);font-size:12.5px;min-width:0}
+.task-state{flex:none;font-weight:650;letter-spacing:.02em}
+.task-strip[data-status="queued"] .task-state,
+.task-strip[data-status="running"] .task-state{color:var(--accent-h)}
+.task-strip[data-status="awaiting_confirm"] .task-state,
+.task-strip[data-status="stopping"] .task-state,
+.task-strip[data-status="uncertain"] .task-state{color:var(--warn-text)}
+.task-strip[data-status="failed"] .task-state{color:var(--err-text)}
+.task-strip[data-status="done"] .task-state,
+.task-strip[data-status="stopped"] .task-state{color:var(--ok-text)}
+.task-action{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.task-time{flex:none;font-variant-numeric:tabular-nums}
+.bj-rule,.bj-counts{font-size:12px;color:var(--muted);margin:4px 0 2px;line-height:1.45}
+.bj-i-st-tx{flex:none;font-size:11px;color:var(--muted)}
+
 /* ── 桌面优先：收起右侧检查器 / 左侧会话栏后，缩窄窗口仍可保持可操作 ── */
 body{min-width:720px}
 /* 窄一点的桌面窗口：顶栏动作收进「⋯」，标题不再被挤成 0 宽 */
@@ -1131,6 +1158,8 @@ body{min-width:720px}
   #sidebar{width:210px;min-width:180px}
   #messages{padding:26px 14px 22px}
   #inputBar{padding:10px 12px}
+  .task-strip{margin:8px 12px 0;flex-wrap:wrap}
+  .task-action{flex-basis:100%}
   .ch-actions{gap:6px}
   #chatHead{padding:10px 12px}
 }
@@ -1159,3 +1188,18 @@ body{min-width:720px}
 #runBanner svg.ic,#queueBar svg.ic,#netBanner svg.ic{vertical-align:-.18em;margin-right:4px}
 #netBanner{display:flex;align-items:center;justify-content:center;gap:6px}
 #toast span{min-width:0}
+
+/* ── 阅读栏：内容居中，检查器默认不占位，状态层在输入框上方 ── */
+#sidebar{background:#f7f8fa}
+[data-theme="dark"] #sidebar{background:#191c24}
+#messages{padding:28px 24px 24px}
+.msg{width:min(720px,100%)}
+#welcome{width:min(720px,100%)}
+#inputBar{background:var(--bg);border-top:0;padding:8px 24px 18px}
+.input-row,.input-hint{max-width:720px}
+.input-hint{margin-bottom:8px}
+#btnNew{border-radius:8px;padding:8px 12px;font-size:13px}
+.logo-mark{background:var(--accent-strong);box-shadow:none}
+#btnPanel .btn-label{margin-left:4px;font-size:13px}
+.timeline{background:transparent;border:0;border-top:1px solid var(--border);border-radius:0}
+.change-card{background:transparent;border:0;padding:6px 0;box-shadow:none}

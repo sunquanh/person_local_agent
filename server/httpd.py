@@ -30,6 +30,7 @@ from agent.llm import LLMClient, LLMError
 from agent.memory import Memory
 from agent.workspace import Workspace
 from server.batch import BatchRunner, valid_job_id
+from server.runs import ModelGate
 from server.sessions import SessionManager
 
 log = logsetup.get('http')
@@ -276,9 +277,15 @@ def _delete_attachment_ref(app, sid: str, ts: float, path: str):
 
 
 class AgentServer:
-    def __init__(self, config: dict, config_path: str = None):
+    def __init__(self, config: dict, config_path: str = None, program_dir: str = None,
+                 also_config_path: str = None):
         self.config = config
         self.config_path = config_path
+        self.program_dir = program_dir
+        self._config_paths = []
+        for _p in (config_path, also_config_path):
+            if _p and _p not in self._config_paths:
+                self._config_paths.append(_p)
         m = config.get('model', {}) or {}
         w = config.get('workspace', {}) or {}
         limits = config.get('limits', {}) or {}
@@ -312,6 +319,15 @@ class AgentServer:
         self.rag = Rag(w.get('root', '') or str(self.ws.root))
         self.memory = Memory(str(self.ws.root / '.agent' / 'memory.db'))
         self.sessions = SessionManager(str(self.ws.root / '.agent'))
+        from server.runs import RunRegistry
+        self.runs = RunRegistry(root=str(self.ws.root / '.agent' / 'runs'))
+        try:
+            slots = int(limits.get('model_slots', 1) or 1)
+        except (TypeError, ValueError):
+            slots = 1
+        # 交互、批量、记忆共用一个模型槽。批量代码会 acquire('batch')，
+        # 这里必须先挂上，否则作业一启动就是 AttributeError。
+        self.gate = ModelGate(slots)
         self.batch = BatchRunner(self)   # 批量作业（B8）：单 worker 串行执行
         # MCP 客户端（B5）：按 config.mcp.servers 拉起子进程（失败只影响对应 server）
         try:
@@ -816,19 +832,24 @@ class AgentServer:
                            for s in servers) or '（空）')
 
     def _persist(self):
-        """原子写 config.json（api_key 已保证是 ENC 形态）。"""
-        if not self.config_path:
+        """原子写配置。密钥在调用前已是 ENC 形态。不在日志里打印正文。"""
+        paths = list(self._config_paths or [])
+        if self.config_path and self.config_path not in paths:
+            paths.append(self.config_path)
+        if not paths:
             return
         try:
             import tempfile
-            p = self.config_path
-            d = os.path.dirname(p) or '.'
-            fd, tmp = tempfile.mkstemp(dir=d, prefix='config.', suffix='.tmp')
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, p)
+            payload = json.dumps(self.config, ensure_ascii=False, indent=2)
+            for p in paths:
+                d = os.path.dirname(p) or '.'
+                os.makedirs(d, exist_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=d, prefix='config.', suffix='.tmp')
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    f.write(payload)
+                os.replace(tmp, p)
         except Exception as e:
-            log.error('保存配置失败: %s', e)
+            log.error('保存配置失败: %s', type(e).__name__)
 
     def _redacted_config(self) -> dict:
         """配置快照（**脱敏**）：api_key / MCP 环境变量 / 访问令牌一律不外带。
@@ -1257,6 +1278,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.app._redacted_config())
             if path == '/api/settings':
                 return self._json(self._settings())
+            if path == '/api/ui':
+                from server.storepath import load_ui
+                return self._json(load_ui(str(self.app.ws.root)))
             if path == '/api/rag/index':
                 # GET 但有副作用（重建索引）：走写请求的 CSRF 门禁，
                 # 否则任意网页一次顶级导航就能凭 cookie 触发。
@@ -1271,6 +1295,18 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/search':
                 q = (qs.get('q') or [''])[0]
                 return self._json({"results": self.app.sessions.search(q)})
+            if path == '/api/run':
+                rid = (qs.get('id') or [''])[0]
+                sid = (qs.get('sid') or [''])[0]
+                req = (qs.get('req') or [''])[0]
+                run = None
+                if rid:
+                    run = self.app.runs.by_id(rid)
+                elif req:
+                    run = self.app.runs.for_request(req)
+                elif sid:
+                    run = self.app.runs.for_session(sid)
+                return self._json({'run': None if run is None else run.snapshot(0)})
             if path == '/api/jobs':
                 cid = self._client_id()
                 title = ''
@@ -1801,6 +1837,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/workspace/delete':
                 d = json.loads(self._read_body() or b'{}')
                 return self._workspace_delete(d.get('path', ''))
+            if path == '/api/ui':
+                from server.storepath import save_ui
+                d = json.loads(self._read_body() or b'{}')
+                if not isinstance(d, dict):
+                    return self._err(400, '界面偏好必须是对象')
+                saved = save_ui(str(self.app.ws.root), d)
+                return self._json(saved)
             if path == '/api/settings':
                 d = json.loads(self._read_body() or b'{}')
                 # 工作台目录（D）：只校验 + 写 config，热切换风险大（会话/记忆/RAG/作业
@@ -1821,6 +1864,9 @@ class Handler(BaseHTTPRequestHandler):
                         self.app.config.setdefault('workspace', {})['root'] = \
                             str(cand.root)
                         self.app._persist()
+                        if self.app.program_dir:
+                            from server.storepath import write_pointer
+                            write_pointer(self.app.program_dir, str(cand.root))
                         log.info('工作台目录已改（重启生效）: %s', cand.root)
                 self.app.save_config(model=d.get('model'), limits=d.get('limits'),
                                      rag=d.get('rag'), security=d.get('security'),
@@ -2057,9 +2103,44 @@ class Handler(BaseHTTPRequestHandler):
                 continue
         return parts if len(parts) > 1 else text
 
+    def _follow_existing_run(self, run):
+        """同一个 client_req_id 再进来：只回放，不重新执行。"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self._sse_started = True
+        cursor = 0
+        idle = 0
+        while idle < 600:
+            snap = run.snapshot(cursor)
+            for ev in snap['events']:
+                try:
+                    payload = json.dumps(ev, ensure_ascii=False)
+                    self.wfile.write(f'data: {payload}\n\n'.encode('utf-8'))
+                    self.wfile.flush()
+                except Exception:
+                    return
+            cursor = snap['cursor']
+            if run.status not in ('queued', 'running', 'stopping', 'awaiting_confirm'):
+                tail = json.dumps({
+                    'type': 'run', 'id': run.id, 'status': run.status,
+                    'action': run.action,
+                }, ensure_ascii=False)
+                try:
+                    self.wfile.write(f'data: {tail}\n\n'.encode('utf-8'))
+                    self.wfile.flush()
+                except Exception:
+                    pass
+                return
+            time.sleep(0.2)
+            idle += 1
+
     def _handle_chat(self):
         app = self.app
         self._sse_started = False
+        self._owns_run = False
         token = object()          # 本请求的 busy 持有凭证（防止误放别人的锁）
         released = {'v': False}
 
@@ -2093,6 +2174,15 @@ class Handler(BaseHTTPRequestHandler):
             # 然后注入到发给模型的消息上下文里，让 AI 知道并读取附件。
             valid_att = _validate_attachments(app.ws, d.get('attachments'))
 
+            req_id = str(d.get('client_req_id') or '').strip()
+            if req_id and not re.fullmatch(r'[A-Za-z0-9_-]{8,64}', req_id):
+                return self._err(400, '非法 client_req_id')
+            # 同一个请求再进来时，不能先新建一个空会话。
+            if req_id:
+                existing = app.runs.for_request(req_id)
+                if existing is not None:
+                    return self._follow_existing_run(existing)
+
             sid = d.get('session_id') or ''
             if sid:
                 try:
@@ -2109,6 +2199,15 @@ class Handler(BaseHTTPRequestHandler):
                 app.sessions.rename(sid, new_title)
                 session.title = new_title
             app._current_sid = sid
+            req_id = str(d.get('client_req_id') or '').strip()
+            if req_id and not re.fullmatch(r'[A-Za-z0-9_-]{8,64}', req_id):
+                return self._err(400, '非法 client_req_id')
+            run, created = app.runs.get_or_create(
+                sid, self._client_id(), 'chat', req_id)
+            self._run = run
+            self._detached = False
+            if not created:
+                return self._follow_existing_run(run)
 
             user_input = self._build_user_input(message, valid_att)
             history = self._session_history(session)
@@ -2133,6 +2232,10 @@ class Handler(BaseHTTPRequestHandler):
                 if kind not in TURN_EVENTS:
                     # 开发期显眼提示；生产不因一个坏帧打死整轮对话
                     log.error('未登记的 SSE 事件类型: %s', kind)
+                current = getattr(self, '_run', None)
+                if current is not None:
+                    current.add(kind, **data)
+                    app.runs.save(current)
                 payload = json.dumps({"type": kind, **data}, ensure_ascii=False)
                 with send_lock:
                     try:
@@ -2187,6 +2290,7 @@ class Handler(BaseHTTPRequestHandler):
             box.alive = self._client_alive          # 提问时感知断开，不空等 180s
             box.owner = self._client_id()           # 局域网：只有发起者能确认/回答/停止
             app._running = agent
+            self._owns_run = True
             app._running_sid = sid                  # 断流续看：供 /api/jobs 报告“仍在运行”
             app._running_owner = box.owner
             app._run_started = time.time()
@@ -2206,7 +2310,15 @@ class Handler(BaseHTTPRequestHandler):
             run_t0 = time.monotonic()
 
             def run_agent():
+                held = False
                 try:
+                    # 与批量作业共用模型槽：交互优先，拿不到槽就不跑第二遍。
+                    held = app.gate.acquire(
+                        'chat', timeout=app.chat_timeout_s,
+                        stop=lambda: agent.stop_requested())
+                    if not held:
+                        result_box['e'] = '未获得模型槽位（已停止或等待超时）'
+                        return
                     result_box['r'] = agent.run(history, user_input, mode=mode)
                     result_box['ok'] = True
                 except LLMError as e:
@@ -2216,6 +2328,11 @@ class Handler(BaseHTTPRequestHandler):
                     result_box['e'] = f'{type(e).__name__}: {e}'
                     log.exception('对话失败: %s', e)
                 finally:
+                    if held:
+                        try:
+                            app.gate.release()
+                        except Exception:
+                            pass
                     release_busy()
                     r = result_box.get('r')
                     app._jobs.insert(0, {
@@ -2245,8 +2362,12 @@ class Handler(BaseHTTPRequestHandler):
                 # 运行期断连检测：排队期有，运行期旧版没有——关页后 handler
                 # 会等满超时才退出，白白占线程、agent 也继续烧模型。
                 if heart % 4 == 0 and not self._client_alive():
+                    # 刷新或断线不停止、不重新执行。停止写 socket，任务继续到结束。
                     disconnected = True
-                    break
+                    self._detached = True
+                    if getattr(self, '_run', None):
+                        self._run.touch(action='连接已断开，任务仍在执行')
+                        app.runs.save(self._run)
                 # 快到时先问一声：离线大模型的长任务很常见，给用户「再等 5 分钟」的机会
                 if (not warned and app.chat_timeout_s >= 120
                         and time.monotonic() > watch['deadline'] - app.chat_timeout_s * 0.2):
@@ -2256,22 +2377,19 @@ class Handler(BaseHTTPRequestHandler):
                                   f'接近 {int(app.chat_timeout_s)} 秒上限；'
                                   f'内网大模型的长任务可点「再等 5 分钟」。'),
                          extendable=True)
-            if disconnected:
-                agent.request_stop()
-                t.join(2)
-                if t.is_alive():
-                    # 线程杀不掉（Python 无线程终止）：只记日志，等 agent
-                    # 注意到 stop 后自行退出；release_busy 在其 finally 里。
-                    log.warning('客户端断开后 agent 线程 2 秒内未退出，继续后台收尾')
-                return
             if not result_box:
                 agent.request_stop()
-                send('error',
-                     message=(f'任务执行超时（{int(app.chat_timeout_s)} 秒），已强制终止。'
-                              f'可在 设置 → 运行 调大「单轮超时」后重试。'),
-                     limit_s=int(app.chat_timeout_s))
                 t.join(2)
-                if t.is_alive():
+                still = t.is_alive()
+                if getattr(self, '_run', None):
+                    app.runs.finish(self._run, 'uncertain' if still else 'stopped')
+                send('error',
+                     message=(('已请求停止，但执行线程仍未退出，结果不确定。'
+                               if still else
+                               f'任务执行超时（{int(app.chat_timeout_s)} 秒），已强制终止。')
+                              + '可在 设置 → 运行 调大「单轮超时」后重试。'),
+                     limit_s=int(app.chat_timeout_s))
+                if still:
                     log.warning('看门狗超时后 agent 线程 2 秒内未退出，继续后台收尾')
                 return
 
@@ -2281,9 +2399,18 @@ class Handler(BaseHTTPRequestHandler):
             app._running_watch = None
 
             if 'e' in result_box:
+                if getattr(self, '_run', None):
+                    app.runs.finish(self._run, 'failed')
                 send('error', message=result_box['e'])
                 return
             r = result_box.get('r')
+            if getattr(self, '_run', None) and self._run.status == 'running':
+                if r and r.get('stop_uncertain'):
+                    app.runs.finish(self._run, 'uncertain')
+                elif r and r.get('stopped'):
+                    app.runs.finish(self._run, 'stopped')
+                else:
+                    app.runs.finish(self._run, 'done')
             if not r:
                 return
 
@@ -2314,6 +2441,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
             send('result', response=r['response'], stopped=r['stopped'],
+                 stop_uncertain=bool(r.get('stop_uncertain')),
                  artifacts=app._artifact_metas(r['artifacts']), session_id=sid,
                  elapsed_s=round(time.monotonic() - t0, 1),
                  usage=r.get('usage') or {},
@@ -2340,11 +2468,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._err(500, f'{type(e).__name__}: {e}')
         finally:
             release_busy()
-            app._running = None
-            app._running_sid = ''
-            app._running_owner = ''
-            app._running_watch = None
-            app._pending_confirm = None
+            if getattr(self, '_owns_run', False):
+                app._running = None
+                app._running_sid = ''
+                app._running_owner = ''
+                app._running_watch = None
+                app._pending_confirm = None
             _dequeue()
 
     def log_message(self, fmt, *args):
@@ -2901,8 +3030,10 @@ def _release_instance_lock(lock_path):
         pass
 
 
-def serve(config: dict, host: str = None, port: int = None, config_path: str = None):
-    app = AgentServer(config, config_path=config_path)
+def serve(config: dict, host: str = None, port: int = None, config_path: str = None,
+          program_dir: str = None, also_config_path: str = None):
+    app = AgentServer(config, config_path=config_path, program_dir=program_dir,
+                      also_config_path=also_config_path)
     bind_host = host or config.get('server', {}).get('host', '127.0.0.1')
     bind_port = port or int(config.get('server', {}).get('port', 8080))
 

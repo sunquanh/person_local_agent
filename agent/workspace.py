@@ -28,6 +28,7 @@
   （新增的文件删除、覆盖的文件还原）。
 """
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -203,6 +204,8 @@ class Workspace:
                     f"原因: {e}\n请检查盘符是否存在（如 D: 未挂载）、目录是否可写，"
                     f"或修改 config.json 的 workspace.root 指向有效路径。") from e
         self._tl = threading.local()   # 线程内：ctx / 本轮快照
+        self._claim_lock = threading.Lock()
+        self._claims = {}               # rel -> (sid, turn)
 
     # ── 会话上下文（线程局部）─────────────────────────────────────
     @property
@@ -236,10 +239,47 @@ class Workspace:
         self._tl.snap_depth = 1
         return turn
 
+    def note_untracked(self, kind: str):
+        """外部命令等无法按文件恢复的操作。撤销时只说明限制，不假装能还原。"""
+        snap = getattr(self._tl, 'snap', None)
+        if not snap:
+            return
+        kinds = snap.setdefault('untracked', [])
+        if kind not in kinds:
+            kinds.append(kind)
+
+    def _file_hash(self, path: Path) -> str:
+        if not path.is_file():
+            return ''
+        digest = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(65536), b''):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _claim(self, rel: str):
+        snap = getattr(self._tl, 'snap', None)
+        if not snap:
+            return
+        me = (snap['sid'], snap['turn'])
+        with self._claim_lock:
+            holder = self._claims.get(rel)
+            if holder and holder != me:
+                raise PermissionError(f'文件正被另一任务写入: {rel}')
+            self._claims[rel] = me
+
+    def _release_claims(self, sid, turn):
+        me = (sid, turn)
+        with self._claim_lock:
+            for rel, holder in list(self._claims.items()):
+                if holder == me:
+                    self._claims.pop(rel, None)
+
     def _snap_record(self, real: Path, rel: str):
         snap = getattr(self._tl, 'snap', None)
         if not snap:
             return
+        self._claim(rel)
         key = str(real)
         if key in snap['seen']:
             return
@@ -249,11 +289,16 @@ class Workspace:
                 snap['dir'].mkdir(parents=True, exist_ok=True)
                 bak = f"{len(snap['entries'])}.bak"
                 shutil.copy2(real, snap['dir'] / bak)
-                snap['entries'].append({"rel": rel, "existed": True, "backup": bak})
+                snap['entries'].append({
+                    "rel": rel, "existed": True, "backup": bak,
+                    "before_hash": self._file_hash(real),
+                })
             elif real.is_dir():
                 snap['entries'].append({"rel": rel, "existed": True, "is_dir": True})
             else:
-                snap['entries'].append({"rel": rel, "existed": False})
+                snap['entries'].append({
+                    "rel": rel, "existed": False, "before_hash": "",
+                })
         except OSError:
             pass
 
@@ -272,18 +317,31 @@ class Workspace:
             return None
         snap = getattr(self._tl, 'snap', None)
         self._tl.snap = None
+        self._release_claims(snap['sid'] if snap else '', snap['turn'] if snap else '')
         if not snap or not snap['entries']:
             return None
+        for entry in snap['entries']:
+            rel = str(entry.get('rel') or '')
+            try:
+                current = (self.root / rel)
+                entry['after_hash'] = self._file_hash(current)
+            except OSError:
+                entry['after_hash'] = ''
         try:
             d = snap['dir']
             d.mkdir(parents=True, exist_ok=True)
             (d / 'journal.json').write_text(json.dumps({
                 "sid": snap['sid'], "turn": snap['turn'], "ts": time.time(),
-                "entries": snap['entries']}, ensure_ascii=False), encoding='utf-8')
+                "entries": snap['entries'],
+                "untracked": list(snap.get('untracked') or []),
+            }, ensure_ascii=False), encoding='utf-8')
         except OSError:
             return None
-        return {"turn": snap['turn'], "count": len(snap['entries']),
+        info = {"turn": snap['turn'], "count": len(snap['entries']),
                 "files": [e['rel'] for e in snap['entries']]}
+        if snap.get('untracked'):
+            info['limits'] = ['外部命令造成的改动不在可恢复范围内']
+        return info
 
     def _snap_root(self, sid: str) -> Path:
         return self.root / '.agent' / 'snapshots' / sanitize_slug(sid, 'x')
@@ -328,6 +386,23 @@ class Workspace:
         if not j.is_file():
             raise FileNotFoundError('该轮没有可撤销的记录')
         data = json.loads(j.read_text(encoding='utf-8'))
+        conflicts = []
+        for e in (data.get('entries') or []):
+            rel = str(e.get('rel') or '')
+            if 'after_hash' not in e or e.get('is_dir'):
+                continue
+            try:
+                real = (self.root / rel)
+                current = self._file_hash(real)
+            except OSError:
+                current = ''
+            if current != e.get('after_hash'):
+                conflicts.append(rel)
+        if conflicts:
+            return {"restored": 0, "removed": 0, "failed": [],
+                    "conflicts": conflicts, "refused": True,
+                    "limits": (['外部命令造成的改动不在可恢复范围内']
+                               if data.get('untracked') else [])}
         restored, removed, failed = 0, 0, []
         for e in reversed(data.get('entries') or []):
             rel = str(e.get('rel') or '')
@@ -359,7 +434,11 @@ class Workspace:
             except OSError:
                 failed.append(rel)
         shutil.rmtree(d, ignore_errors=True)
-        return {"restored": restored, "removed": removed, "failed": failed}
+        result = {"restored": restored, "removed": removed, "failed": failed,
+                  "conflicts": [], "refused": False}
+        if data.get('untracked'):
+            result['limits'] = ['外部命令造成的改动不在可恢复范围内']
+        return result
 
     def version_diff(self, rel: str, ts: str) -> dict:
         """把某个历史版本与当前文件做统一 diff（产物版本并排对比用）。"""

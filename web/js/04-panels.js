@@ -245,12 +245,12 @@ function switchSession(dir) {
 /* ── 分栏拖拽把手 + 窄屏抽屉（U7）──────────────────────── */
 function initResizer(el, side) {
   if (!el) return;
-  const KEY = side === 'left' ? 'sb-w' : 'rp-w';
+  const widthKey = () => uiCacheKey(state.wsRoot, side === 'left' ? 'sb-w' : 'rp-w');
   const VAR = side === 'left' ? '--sb-w' : '--rp-w';
   const MIN = side === 'left' ? 200 : 250;
   const MAX = side === 'left' ? 420 : 460;
   let saved = 0;
-  try { saved = +(localStorage.getItem(KEY) || 0); } catch (e) {}
+  try { saved = +(localStorage.getItem(widthKey()) || 0); } catch (e) {}
   if (saved) document.body.style.setProperty(VAR, saved + 'px');
   const target = side === 'left' ? $('#sidebar') : $('#rightPanel');
   el.addEventListener('mousedown', (e) => {
@@ -269,15 +269,23 @@ function initResizer(el, side) {
       document.body.classList.remove('resizing');
       document.removeEventListener('mousemove', move);
       document.removeEventListener('mouseup', up);
-      try { localStorage.setItem(KEY, String(Math.round(target.getBoundingClientRect().width))); }
-      catch (err) {}
+      try {
+        const width = Math.round(target.getBoundingClientRect().width);
+        localStorage.setItem(widthKey(), String(width));
+        const widths = {
+          sb: Math.round(parseFloat(document.body.style.getPropertyValue('--sb-w')) || 0),
+          rp: Math.round(parseFloat(document.body.style.getPropertyValue('--rp-w')) || 0),
+        };
+        widths[side === 'left' ? 'sb' : 'rp'] = width;
+        persistUi({ panel_widths: widths });
+      } catch (err) {}
     };
     document.addEventListener('mousemove', move);
     document.addEventListener('mouseup', up);
   });
   el.addEventListener('dblclick', () => {
     document.body.style.removeProperty(VAR);
-    try { localStorage.removeItem(KEY); } catch (e) {}
+    try { localStorage.removeItem(widthKey()); } catch (e) {}
     toast('宽度已复位');
   });
 }
@@ -436,6 +444,85 @@ setInterval(() => {
     .catch(() => b.classList.remove('hidden'));
 }, 15000);
 
+/* ── 任务状态：排队 / 执行 / 等待确认 / 停止中 / 已停止 / 失败 / 完成 / 不确定 ── */
+const TASK_LABEL = {
+  idle: '空闲', queued: '排队', running: '执行中', awaiting_confirm: '等待确认',
+  stopping: '停止中', stopped: '已停止', failed: '失败', done: '完成',
+  uncertain: '结果不确定',
+};
+function setTask(status, action) {
+  const t = state.task || (state.task = {});
+  const prev = t.status;
+  t.status = status || 'idle';
+  if (action != null) t.action = action;
+  t.updatedAt = Date.now();
+  if ((t.status === 'running' || t.status === 'queued' || t.status === 'awaiting_confirm')
+      && !t.startedAt) {
+    t.startedAt = t.updatedAt;
+  }
+  if (prev === 'idle' && t.status !== 'idle' && !t.startedAt) t.startedAt = t.updatedAt;
+  paintTask();
+}
+function paintTask() {
+  const el = $('#taskStrip');
+  if (!el) return;
+  const t = state.task || {};
+  const st = t.status || 'idle';
+  if (st === 'idle') { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.dataset.status = st;
+  const stateEl = $('#taskState');
+  const actEl = $('#taskAction');
+  const timeEl = $('#taskTime');
+  if (stateEl) stateEl.textContent = TASK_LABEL[st] || st;
+  if (actEl) actEl.textContent = t.action || '';
+  const start = t.startedAt || 0;
+  const sec = start ? Math.max(0, Math.round((Date.now() - start) / 1000)) : 0;
+  const upd = t.updatedAt ? new Date(t.updatedAt) : null;
+  const hh = upd ? upd.toLocaleTimeString('zh-CN', { hour12: false }) : '';
+  const live = st === 'queued' || st === 'running' || st === 'awaiting_confirm' || st === 'stopping';
+  if (timeEl) {
+    timeEl.textContent = (sec ? (live ? `已进行 ${sec}s` : `耗时 ${sec}s`) : '')
+      + (hh ? `${sec ? ' · ' : ''}更新于 ${hh}` : '');
+  }
+}
+setInterval(() => {
+  const st = (state.task || {}).status;
+  if (st && st !== 'idle' && st !== 'done' && st !== 'failed' && st !== 'stopped'
+      && st !== 'uncertain') paintTask();
+}, 1000);
+const PROFILE_SHORT = {
+  readonly: '只读', suggest: '建议', auto_edit: '自动编辑', trusted: '可信',
+};
+function paintPerm() {
+  const el = $('#permLabel');
+  if (!el) return;
+  if ($('#askMode') && $('#askMode').checked) {
+    el.textContent = '权限：只读（本轮）';
+    return;
+  }
+  const p = state.profile || '';
+  el.textContent = '权限：' + (PROFILE_SHORT[p] || (p ? p : '未读取'));
+}
+function paintScope(d) {
+  if (d) {
+    state.wsRoot = d.workspace || state.wsRoot || '';
+    state.modelName = (d.model || {}).name || state.modelName || '';
+    state.modelBase = (d.model || {}).base_url || state.modelBase || '';
+  }
+  const wd = $('#wdLabel');
+  if (wd) {
+    wd.textContent = state.wsRoot ? ('目录 ' + state.wsRoot) : '目录未设置';
+    wd.title = state.wsRoot || '';
+  }
+  const scope = $('#scopeNote');
+  if (scope) {
+    const base = state.modelBase || '未配置的模型地址';
+    scope.textContent = `发给模型的对话、附件和工具读到的内容会发往 ${base}。本机执行不等于内容不出机。`;
+  }
+  paintPerm();
+}
+
 /* ── 断流续看（B6 最小方案）：刷新页面后仍能看到“上一轮在跑”，
       跑完自动刷新本会话（不必做完整事件回放）── */
 let runSeen = false;
@@ -464,8 +551,19 @@ setInterval(async () => {
     } else {
       b.innerHTML = ico('clock') + ' 上一轮仍在后台运行，完成后自动刷新本会话';
     }
+    if (mine && state.task && state.task.status === 'stopping' && d.running) {
+      setTask('stopping', '停止请求已发出，任务仍在运行');
+    } else if (!d.running && state.task && state.task.status === 'stopping') {
+      setTask('uncertain', '已发出停止，但没有收到任务结束结果');
+    }
     if (mine) {
       runSeen = true;
+      if (!state.busy && state.task && (state.task.status === 'idle' || !state.task.status)) {
+        const sec = d.started_at ? Math.max(0, Math.round(Date.now() / 1000 - d.started_at)) : 0;
+        setTask('running', (d.running_title ? `后台仍在执行「${d.running_title}」` : '后台仍在执行')
+          + (sec ? '' : ''));
+        if (d.started_at) state.task.startedAt = d.started_at * 1000;
+      }
     } else if (runSeen) {
       runSeen = false;
       await loadSessionMessages();
@@ -476,6 +574,11 @@ setInterval(async () => {
 
 document.addEventListener('click', (e) => {
   // 站内预览：产出物链接不再直接新开页/下载
+  const sum = e.target.closest('.tl-sum');
+  if (sum && !e.target.closest('.tl-copy')) {
+    const det = sum.parentElement && sum.parentElement.querySelector('.tl-detail');
+    if (det && det.textContent) det.classList.toggle('hidden');
+  }
   const pv = e.target.closest('[data-pv]');
   if (pv) { e.preventDefault(); openPreview(pv.dataset.pv, pv.textContent.trim()); return; }
   // 复制：工具结果（data-copy）/ 代码块 / 思考块 / 回答

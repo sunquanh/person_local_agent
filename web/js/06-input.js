@@ -383,16 +383,21 @@ function setBusyUI(b) {
   $('#btnStop').classList.toggle('hidden', !b);
 }
 async function stopRun() {
-  // 1. 标记手动停止（AbortError 分支不再重复弹 toast）
+  // 先标成停止中。真正结束要等结果帧或后台状态，不能在点击当下就写成已停止。
   stopFlag = true;
   setTimeout(() => { stopFlag = false; }, 1200);
-  // 2. 中止所有在跑/排队中的请求（含排队取消）
+  setTask('stopping', '正在停止模型请求');
   abortCtrls.forEach((c) => c.abort());
-  // 3. 通知后端终止 agent（stop_event + abort LLM socket，立即生效）
-  try { await fetch('/api/stop', { method: 'POST' }); } catch (e) {}
-  // 4. 立即清理排队条并提示（UI 复位由各请求 finally 同步 pendingCount）
+  let stopped = false;
+  try {
+    const r = await fetch('/api/stop', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    stopped = r.ok && d.running === false;
+  } catch (e) {}
   $('#queueBar').classList.add('hidden');
-  toast('⏹️ 已停止');
+  if (stopped) setTask('stopped', '当前没有仍在运行的任务');
+  else setTask('stopping', '已请求停止，等待任务结束');
+  toast(stopped ? '当前没有仍在运行的任务' : '已请求停止，结束后才会显示已停止');
 }
 
 /* ── 输入区 ───────────────────────────────────────────────── */
@@ -406,7 +411,7 @@ const SLASH = [
   { cmd: '/上传', label: '上传文件到 inputs', icon: 'paperclip', run: () => $('#btnUpload').click() },
   { cmd: '/导出', label: '导出当前会话', icon: 'upload', run: () => $('#btnExport').click() },
   { cmd: '/导出网页', label: '导出为网页 HTML（双击可看）', icon: 'globe', run: () => exportHtml() },
-  { cmd: '/只读', label: '切换只读模式', icon: 'shield', run: () => { const c = $('#askMode'); c.checked = !c.checked; toast(c.checked ? '🛡 已开启只读模式（AI 不能写文件/执行命令）' : '只读模式已关闭'); } },
+  { cmd: '/只读', label: '切换只读模式', icon: 'shield', run: () => { const c = $('#askMode'); c.checked = !c.checked; paintPerm(); toast(c.checked ? '已开启只读模式（AI 不能写文件/执行命令）' : '只读模式已关闭'); } },
   { cmd: '/停止', label: '停止当前任务', icon: 'stop', run: () => { if (state.busy) stopRun(); else toast('当前没有运行中的任务'); } },
   { cmd: '/批量', label: '批量作业（一个目录一次跑完）', icon: 'box', run: () => openBatch() },
 ];

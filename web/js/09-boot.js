@@ -3,13 +3,12 @@
 /* ── 启动 ─────────────────────────────────────────────────── */
 /* ── 会话级临时换模型（B9）：只覆盖模型名，同 base_url/key ── */
 let modelOvMap = {};
-try { modelOvMap = JSON.parse(localStorage.getItem('modelOverrides') || '{}'); } catch (e) { modelOvMap = {}; }
 function currentModelOv() { return (state.cur && modelOvMap[state.cur]) || ''; }
 function setModelOv(name) {
   if (!state.cur) return toast('请先选择会话', true);
   if (name) modelOvMap[state.cur] = String(name).trim();
   else delete modelOvMap[state.cur];
-  try { localStorage.setItem('modelOverrides', JSON.stringify(modelOvMap)); } catch (e) {}
+  persistUi({ model_overrides: modelOvMap });
   renderModelSel();
 }
 async function renderModelSel() {
@@ -170,25 +169,84 @@ wbPageRegister();
 
 applyTheme();
 slashFillTemplates();
-loadSessions().then(() => {
-  // 记住最后会话：刷新后自动恢复上次打开的会话，不用手动找
-  let last = null;
-  try { last = localStorage.getItem('lastSession'); } catch (e) {}
+function attachRun(sid) {
+  if (!sid) return;
+  fetch('/api/run?sid=' + encodeURIComponent(sid)).then((r) => r.json()).then((d) => {
+    const run = d && d.run;
+    if (!run) return;
+    if (run.status === 'running' || run.status === 'stopping' || run.status === 'queued') {
+      setTask(run.status === 'queued' ? 'queued' : 'running',
+              run.action || '同一任务仍在执行，没有重新发送');
+    } else if (run.status === 'interrupted' || run.status === 'uncertain') {
+      setTask('uncertain', run.action || '进程已退出，任务没有可靠的结束结果');
+    }
+  }).catch(() => {});
+}
+function openRememberedSession() {
+  let last = '';
+  try { last = localStorage.getItem(uiCacheKey(state.wsRoot, 'lastSession')) || ''; } catch (e) {}
   if (last && state.sessions.some((s) => s.id === last)) {
     selectSession(last);
+    attachRun(last);
   } else if (!state.cur) {
     showWelcome(true);
   }
+}
+function applyCachedUi() {
+  let theme = '';
+  try { theme = localStorage.getItem(uiCacheKey(state.wsRoot, 'theme')) || ''; } catch (e) {}
+  if (theme === 'dark' || theme === 'light') applyTheme();
+  try {
+    modelOvMap = JSON.parse(localStorage.getItem(uiCacheKey(state.wsRoot, 'modelOverrides')) || '{}');
+  } catch (e) { modelOvMap = {}; }
+  let sb = 0;
+  try { sb = +(localStorage.getItem(uiCacheKey(state.wsRoot, 'sb-w')) || 0); } catch (e) {}
+  if (sb) document.body.style.setProperty('--sb-w', sb + 'px');
+}
+fetch('/api/health').then((r) => r.json()).then((d) => {
+  if (d && d.workspace) state.wsRoot = d.workspace;
+  applyCachedUi();
+  return fetch('/api/ui').then((r) => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  });
+}).then((ui) => {
+  if (!ui || typeof ui !== 'object') return;
+  if (ui.theme === 'dark' || ui.theme === 'light') applyThemeFrom(ui.theme);
+  if (ui.model_overrides && typeof ui.model_overrides === 'object') {
+    modelOvMap = ui.model_overrides;
+    cacheUiLocal({ model_overrides: modelOvMap });
+  }
+  if (ui.last_session) cacheUiLocal({ last_session: ui.last_session });
+  const w = ui.panel_widths || {};
+  if (w.sb) document.body.style.setProperty('--sb-w', Number(w.sb) + 'px');
+  else document.body.style.removeProperty('--sb-w');
+  if (w.rp) document.body.style.setProperty('--rp-w', Number(w.rp) + 'px');
+  else document.body.style.removeProperty('--rp-w');
+  try {
+    if (!w.sb) localStorage.removeItem(uiCacheKey(state.wsRoot, 'sb-w'));
+    if (!w.rp) localStorage.removeItem(uiCacheKey(state.wsRoot, 'rp-w'));
+  } catch (e) {}
+}).catch(() => {
+  toast(uiSaveMessage(false), true);
+}).finally(() => {
+  loadSessions().then(openRememberedSession);
 });
 setBusyUI(false);
 fetch('/api/health').then((r) => r.json()).then((d) => {
   if (!d || !d.ok) return;
   state.ctxLimit = Number(d.context_window) || 0;
   state.isLoopback = d.is_loopback !== false;
+  paintScope(d);
   $('#sbStatus').innerHTML =
     `<div class="st-name">${esc((d.model || {}).name || '未配置模型')}</div>` +
     `<div class="st-ws" title="${esc(d.workspace || '')}">${esc(d.workspace || '')}</div>`;
 }).catch(() => {});
+fetch('/api/settings').then((r) => r.json()).then((d) => {
+  state.profile = ((d || {}).security || {}).profile || state.profile || '';
+  paintPerm();
+}).catch(() => {});
+if ($('#askMode')) $('#askMode').addEventListener('change', () => paintPerm());
 // 欢迎页建议：动态生成的用 data-i（wChipActions），静态兜底用 data-q
 const wChipsEl = $('#wChips');
 if (wChipsEl) wChipsEl.addEventListener('click', (e) => {
