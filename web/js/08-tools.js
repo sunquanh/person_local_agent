@@ -32,9 +32,6 @@ function openSearchModal(prefill) {
   };
   if (prefill) q.dispatchEvent(new Event('input'));
 }
-const btnSearchEl = $('#btnSearch');
-if (btnSearchEl) btnSearchEl.onclick = () => openSearchModal('');
-
 /* ── 导出当前会话 ─────────────────────────────────────────── */
 $('#btnExport').onclick = () => {
   if (!state.cur) return toast('请先选择要导出的会话', true);
