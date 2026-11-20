@@ -165,7 +165,6 @@ async function selectSession(id, isNew) {
   }
   closeCtxMenu();
   showSkeleton();          // 骨架屏：避免“点了没反应”
-  renderModelSel();        // 会话级临时模型：恢复该会话的选择
   // 切换会话后清空待发送附件条（已发送的附件仍保留在对话记录里）
   state.attachments = [];
   renderAttachStrip();

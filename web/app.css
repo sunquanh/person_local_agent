@@ -190,8 +190,7 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
    ≤1280px 时模型/批量/导出也收进「⋯」（JS 搬 DOM，id 绑定不变） */
 .ch-cluster{display:flex;align-items:center;gap:10px;border:1px solid var(--border);
   border-radius:10px;padding:2px 6px;background:var(--panel)}
-.ch-cluster #modelSel,.ch-cluster #ctxMeter{border-color:transparent;background:transparent}
-.ch-cluster #modelSel:hover{border-color:transparent}
+.ch-cluster #ctxMeter{border-color:transparent;background:transparent}
 .ch-cluster #ctxMeter:hover{background:transparent}
 /* 上下文胶囊隐藏时（新会话）cluster 只剩「压缩历史」，外层圆角框看着像第二个按钮 */
 .ch-cluster:not(:has(#ctxMeter:not(.hidden))){border-color:transparent;background:none;padding:0}
@@ -208,18 +207,12 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .more-menu .btn{width:100%;justify-content:flex-start;background:var(--panel2);border-color:transparent;
   padding:9px 12px;font-size:13px}
 .more-menu .btn:hover{background:var(--panel3);color:var(--accent-h)}
-.more-menu #modelSel{width:100%;max-width:none;background:var(--panel2);border-color:var(--border2);
-  padding:8px 10px;font-size:12.5px}
 #chatTitle{font-weight:700;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   cursor:pointer;user-select:none;display:inline-block;max-width:100%;letter-spacing:.01em}
 #chatTitle::after{content:'✎';font-size:11px;color:var(--muted);margin-left:7px;opacity:0;transition:opacity .15s}
 #chatTitle:hover::after{opacity:.7}
 #chatMeta{color:var(--muted);font-size:12px}
 #btnExport{flex:none;color:var(--muted)}
-#modelSel{flex:none;max-width:150px;min-width:0;padding:6px 6px;font-size:12px;
-  border:none;border-radius:9px;background:transparent;color:var(--muted);
-  cursor:pointer;outline:none;align-self:center;text-overflow:ellipsis;appearance:none}
-#modelSel:hover{color:var(--accent);background:var(--panel2)}
 #btnExport svg{width:13px;height:13px}
 
 /* ── 消息区 ── */
@@ -1121,13 +1114,6 @@ body{min-width:720px}
   .ch-titles{min-width:5em}
 }
 
-/* ── 模型选择：移到输入框左下（对标 Open WebUI / Cursor）── */
-.model-inline{flex:none;max-width:150px;border:none;background:transparent;color:var(--muted);
-  font-size:12px;padding:6px 4px;border-radius:9px;cursor:pointer;outline:none;
-  align-self:center;appearance:none;text-overflow:ellipsis}
-.model-inline:hover{color:var(--accent);background:var(--panel2)}
-@media (max-width:900px){.model-inline{max-width:96px}}
-
 /* ── 首屏：模型不可达时的连接引导 ── */
 .model-card{display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:16px;
   padding:12px 18px;border:1px solid color-mix(in srgb,var(--warn) 40%,var(--border));
@@ -1194,7 +1180,7 @@ body{min-width:720px}
 [data-theme="dark"] #sidebar{background:#191c24}
 #messages{padding:28px 24px 24px}
 .msg{width:min(720px,100%)}
-#welcome{width:min(720px,100%)}
+#welcome{width:min(720px,100%);margin:0 auto}
 #inputBar{background:var(--bg);border-top:0;padding:8px 24px 18px}
 .input-row,.input-hint{max-width:720px}
 .input-hint{margin-bottom:8px}

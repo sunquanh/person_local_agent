@@ -1,49 +1,6 @@
 'use strict';
 
 /* ── 启动 ─────────────────────────────────────────────────── */
-/* ── 会话级临时换模型（B9）：只覆盖模型名，同 base_url/key ── */
-let modelOvMap = {};
-function currentModelOv() { return (state.cur && modelOvMap[state.cur]) || ''; }
-function setModelOv(name) {
-  if (!state.cur) return toast('请先选择会话', true);
-  if (name) modelOvMap[state.cur] = String(name).trim();
-  else delete modelOvMap[state.cur];
-  persistUi({ model_overrides: modelOvMap });
-  renderModelSel();
-}
-async function renderModelSel() {
-  const sel = $('#modelSel');
-  if (!sel) return;
-  let def = '';
-  try {
-    const r = await fetch('/api/health');
-    const h = await r.json();
-    def = (h.model || {}).name || '';
-  } catch (e) {}
-  const used = [...new Set(Object.values(modelOvMap))].slice(0, 6);
-  const cur = currentModelOv();
-  sel.innerHTML = `<option value="">模型：${esc(def || '默认')}</option>` +
-    used.map((m) => `<option value="${esc(m)}">↳ ${esc(m)}</option>`).join('') +
-    '<option value="__other__">其他模型…</option>';
-  if (cur && !used.includes(cur)) {
-    sel.insertAdjacentHTML('afterbegin', `<option value="${esc(cur)}">↳ ${esc(cur)}</option>`);
-  }
-  sel.value = cur || '';
-  sel.title = cur ? `本会话临时使用 ${cur}（同 base_url/key）` : '临时切换模型（仅本会话生效）';
-}
-if ($('#modelSel')) {
-  $('#modelSel').onchange = async () => {
-    const v = $('#modelSel').value;
-    if (v === '__other__') {
-      const name = await promptDialog('临时模型名（仅本会话生效，留空恢复默认）', currentModelOv());
-      setModelOv((name || '').trim());
-      return;
-    }
-    setModelOv(v);
-    toast(v ? `↳ 本会话已切换到模型 ${v}` : '已恢复默认模型');
-  };
-}
-
 /* ── 导出 HTML（双击即可在浏览器查看，零依赖）───────────── */
 async function exportHtml() {
   if (!state.cur) return toast('请先选择要导出的会话', true);
@@ -196,9 +153,6 @@ function applyCachedUi() {
   let theme = '';
   try { theme = localStorage.getItem(uiCacheKey(state.wsRoot, 'theme')) || ''; } catch (e) {}
   if (theme === 'dark' || theme === 'light') applyTheme();
-  try {
-    modelOvMap = JSON.parse(localStorage.getItem(uiCacheKey(state.wsRoot, 'modelOverrides')) || '{}');
-  } catch (e) { modelOvMap = {}; }
   let sb = 0;
   try { sb = +(localStorage.getItem(uiCacheKey(state.wsRoot, 'sb-w')) || 0); } catch (e) {}
   if (sb) document.body.style.setProperty('--sb-w', sb + 'px');
@@ -213,10 +167,6 @@ fetch('/api/health').then((r) => r.json()).then((d) => {
 }).then((ui) => {
   if (!ui || typeof ui !== 'object') return;
   if (ui.theme === 'dark' || ui.theme === 'light') applyThemeFrom(ui.theme);
-  if (ui.model_overrides && typeof ui.model_overrides === 'object') {
-    modelOvMap = ui.model_overrides;
-    cacheUiLocal({ model_overrides: modelOvMap });
-  }
   if (ui.last_session) cacheUiLocal({ last_session: ui.last_session });
   const w = ui.panel_widths || {};
   if (w.sb) document.body.style.setProperty('--sb-w', Number(w.sb) + 'px');

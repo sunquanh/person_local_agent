@@ -205,7 +205,8 @@ def _summarize_mid(mid: list) -> str:
             tail = (" / " + picked[1]) if len(picked) > 1 else ''
             lines.append(f"[工具{'✓' if success else '✗'}] {head}{tail}")
         elif role == 'user' and content.strip():
-            lines.append(f"[用户] {re.sub(r'\s+', ' ', content)[:120]}")
+            clean = re.sub(r'\s+', ' ', content)[:120]
+            lines.append(f"[用户] {clean}")
     if not lines:
         return ''
     return "【中间操作摘要】\n" + "\n".join(lines[-14:])

@@ -459,7 +459,6 @@ async function send(overrideText, overrideAtts, opts) {
         mode: $('#askMode').checked ? 'ask' : 'craft',
         attachments: atts.map((a) => a.path),
         regenerate: regenerate,
-        model: currentModelOv() || undefined,
         client_req_id: clientReqId(runSid),
       }),
       signal: ctrl.signal,

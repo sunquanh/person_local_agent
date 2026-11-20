@@ -222,9 +222,6 @@ function cacheUiLocal(patch) {
   try {
     if (patch.theme) localStorage.setItem(uiCacheKey(ws, 'theme'), patch.theme);
     if (patch.last_session) localStorage.setItem(uiCacheKey(ws, 'lastSession'), patch.last_session);
-    if (patch.model_overrides) {
-      localStorage.setItem(uiCacheKey(ws, 'modelOverrides'), JSON.stringify(patch.model_overrides));
-    }
     if (patch.panel_widths) {
       const w = patch.panel_widths;
       if (w.sb) localStorage.setItem(uiCacheKey(ws, 'sb-w'), String(w.sb));
@@ -241,7 +238,6 @@ async function persistUi(patch) {
   try {
     if (patch.theme) prev.theme = localStorage.getItem(uiCacheKey(ws, 'theme'));
     if (patch.last_session) prev.lastSession = localStorage.getItem(uiCacheKey(ws, 'lastSession'));
-    if (patch.model_overrides) prev.modelOverrides = localStorage.getItem(uiCacheKey(ws, 'modelOverrides'));
     if (patch.panel_widths) {
       if (patch.panel_widths.sb) prev['sb-w'] = localStorage.getItem(uiCacheKey(ws, 'sb-w'));
       if (patch.panel_widths.rp) prev['rp-w'] = localStorage.getItem(uiCacheKey(ws, 'rp-w'));
