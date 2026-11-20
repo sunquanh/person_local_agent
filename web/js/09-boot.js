@@ -169,11 +169,25 @@ wbPageRegister();
 
 applyTheme();
 slashFillTemplates();
+function attachRun(sid) {
+  if (!sid) return;
+  fetch('/api/run?sid=' + encodeURIComponent(sid)).then((r) => r.json()).then((d) => {
+    const run = d && d.run;
+    if (!run) return;
+    if (run.status === 'running' || run.status === 'stopping' || run.status === 'queued') {
+      setTask(run.status === 'queued' ? 'queued' : 'running',
+              run.action || '同一任务仍在执行，没有重新发送');
+    } else if (run.status === 'interrupted' || run.status === 'uncertain') {
+      setTask('uncertain', run.action || '进程已退出，任务没有可靠的结束结果');
+    }
+  }).catch(() => {});
+}
 function openRememberedSession() {
   let last = '';
   try { last = localStorage.getItem(uiCacheKey(state.wsRoot, 'lastSession')) || ''; } catch (e) {}
   if (last && state.sessions.some((s) => s.id === last)) {
     selectSession(last);
+    attachRun(last);
   } else if (!state.cur) {
     showWelcome(true);
   }
@@ -206,6 +220,13 @@ fetch('/api/health').then((r) => r.json()).then((d) => {
   if (ui.last_session) cacheUiLocal({ last_session: ui.last_session });
   const w = ui.panel_widths || {};
   if (w.sb) document.body.style.setProperty('--sb-w', Number(w.sb) + 'px');
+  else document.body.style.removeProperty('--sb-w');
+  if (w.rp) document.body.style.setProperty('--rp-w', Number(w.rp) + 'px');
+  else document.body.style.removeProperty('--rp-w');
+  try {
+    if (!w.sb) localStorage.removeItem(uiCacheKey(state.wsRoot, 'sb-w'));
+    if (!w.rp) localStorage.removeItem(uiCacheKey(state.wsRoot, 'rp-w'));
+  } catch (e) {}
 }).catch(() => {
   toast(uiSaveMessage(false), true);
 }).finally(() => {

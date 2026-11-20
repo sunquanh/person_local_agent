@@ -429,9 +429,13 @@ class Agent:
 
             # ── 执行工具调用（只读类可并行）──
             results = self._exec_batch(calls, tool_steps, artifacts)
+            uncertain = any(
+                (results.get(c['id']) or {}).get('code') == 'uncertain'
+                for c in calls)
             for c in calls:
                 if self.stop_requested():
-                    return self._finish(tool_steps, artifacts, stopped=True)
+                    return self._finish(tool_steps, artifacts, stopped=True,
+                                        stop_uncertain=uncertain)
                 name, res = c['name'], results.get(c['id'])
                 ok = res.get('ok', False)
                 if ok:
@@ -669,13 +673,15 @@ class Agent:
             "compacted": bool(self._compacted),
         }
 
-    def _finish(self, tool_steps, artifacts, stopped, response="", reasoning=""):
+    def _finish(self, tool_steps, artifacts, stopped, response="", reasoning="",
+                stop_uncertain=False):
         return {
             "response": response,
             "reasoning": reasoning,
             "tool_steps": tool_steps,
             "artifacts": artifacts,
             "stopped": stopped,
+            "stop_uncertain": bool(stop_uncertain),
             "usage": self._usage or {},
             "todos": list(self._todos or []),
             "context": dict(self._ctx_stats or {}),

@@ -86,6 +86,61 @@ def _kill_process_tree(proc: subprocess.Popen):
             pass
 
 
+def _blank_stdio(proc):
+    for stream in (getattr(proc, 'stdout', None), getattr(proc, 'stderr', None),
+                   getattr(proc, 'stdin', None)):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except Exception:
+            pass
+    if getattr(proc, 'encoding', None):
+        return '', ''
+    return b'', b''
+
+
+def _wait_subprocess(proc, timeout, stop_check=None, input_data=None):
+    """等到进程结束、超时或停止。返回 (stdout, stderr, outcome)。
+
+    outcome: finished / timeout / stopped / uncertain。
+    uncertain 表示已尝试结束进程树，但限定时间内仍看不到退出。
+    """
+    deadline = time.monotonic() + float(timeout)
+    payload = input_data
+    while True:
+        remain = deadline - time.monotonic()
+        if remain <= 0:
+            _kill_process_tree(proc)
+            try:
+                out, err = proc.communicate(timeout=3)
+            except Exception:
+                out, err = _blank_stdio(proc)
+            return out, err, 'timeout'
+        try:
+            kwargs = {'timeout': min(0.2, remain)}
+            if payload is not None:
+                kwargs['input'] = payload
+                payload = None
+            out, err = proc.communicate(**kwargs)
+            return out, err, 'finished'
+        except subprocess.TimeoutExpired:
+            if stop_check is not None:
+                try:
+                    stop = bool(stop_check())
+                except Exception:
+                    stop = False
+                if stop:
+                    _kill_process_tree(proc)
+                    try:
+                        out, err = proc.communicate(timeout=3)
+                    except Exception:
+                        out, err = _blank_stdio(proc)
+                    if proc.poll() is None:
+                        return out, err, 'uncertain'
+                    return out, err, 'stopped'
+
+
 def _decode(data: bytes) -> str:
     """命令输出解码：utf-8 -> gb18030 -> latin-1。
 
@@ -246,6 +301,16 @@ class ToolRegistry:
             return True
         head = re.split(r'&&|\|\||;', c, maxsplit=1)[0].strip().lower()
         return any(head == p or head.startswith(p + ' ') for p in _READONLY_CMDS)
+
+    def _stop_now(self) -> bool:
+        hooks = self._hooks
+        fn = getattr(hooks, 'stop_requested', None) if hooks is not None else None
+        if not fn:
+            return False
+        try:
+            return bool(fn())
+        except Exception:
+            return False
 
     def remember_cmd(self, cmd: str):
         """用户本次批准后记住完整命令（危险命令不记，下次仍问）。
@@ -442,6 +507,8 @@ class ToolRegistry:
         # ── 代码执行 ────────────────────────────────────────────
         def run_command(a):
             cmd = a['command']
+            if hasattr(ws, 'note_untracked'):
+                ws.note_untracked('run_command')
             # 危险命令：核心层已确认过（pre_approved）则不重复弹窗，否则再拦一次
             if _is_dangerous(cmd) and cmd not in self.pre_approved:
                 if self.confirm_callback is None:
@@ -456,6 +523,8 @@ class ToolRegistry:
             kwargs = {}
             if os.name == 'nt':
                 kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+            else:
+                kwargs['start_new_session'] = True
             t0 = time.monotonic()
             try:
                 proc = subprocess.Popen(cmd, shell=True, cwd=str(ws.root),
@@ -464,16 +533,14 @@ class ToolRegistry:
                                         **kwargs)
             except Exception as e:
                 return ToolResult(f"❌ 无法启动命令: {e}")
-            timed_out = False
-            try:
-                out_b, err_b = proc.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                _kill_process_tree(proc)
-                try:
-                    out_b, err_b = proc.communicate(timeout=5)
-                except Exception:
-                    out_b, err_b = b'', b''
+            out_b, err_b, outcome = _wait_subprocess(
+                proc, timeout, stop_check=self._stop_now)
+            if outcome == 'stopped':
+                return ToolResult(f'⏹️ 已停止：$ {cmd}', ok=False, code='stopped')
+            if outcome == 'uncertain':
+                return ToolResult('结果不确定：子进程未能确认已退出', ok=False,
+                                  code='uncertain')
+            timed_out = outcome == 'timeout'
             out = _decode(out_b)
             err = _decode(err_b)
             body = out + (("\n[stderr]\n" + err) if err.strip() else '')
@@ -530,6 +597,8 @@ class ToolRegistry:
             kwargs = {}
             if os.name == 'nt':
                 kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW：不闪黑窗
+            else:
+                kwargs['start_new_session'] = True
             try:
                 proc = subprocess.Popen(
                     [sys.executable, '-c', wrapper],
@@ -539,14 +608,14 @@ class ToolRegistry:
                     **kwargs)
             except Exception as e:
                 return ToolResult(f"❌ 无法启动子进程: {e}")
-            try:
-                out, err = proc.communicate(input=code, timeout=timeout)
-            except subprocess.TimeoutExpired:
-                _kill_process_tree(proc)
-                try:
-                    proc.communicate(timeout=5)
-                except Exception:
-                    pass
+            out, err, outcome = _wait_subprocess(
+                proc, timeout, stop_check=self._stop_now, input_data=code)
+            if outcome == 'stopped':
+                return ToolResult('⏹️ 代码执行已停止', ok=False, code='stopped')
+            if outcome == 'uncertain':
+                return ToolResult('结果不确定：代码进程未能确认已退出', ok=False,
+                                  code='uncertain')
+            if outcome == 'timeout':
                 return ToolResult(f"⏱️ 代码执行超时（>{timeout}s）已强制终止。请检查是否有死循环。")
             out = (out or '') + ((f"\n[stderr]\n{err}") if err else '')
             out = out.strip()

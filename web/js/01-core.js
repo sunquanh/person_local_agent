@@ -51,6 +51,7 @@ const state = {
   modelBase: '',
   profile: '',
   task: { status: 'idle', action: '', startedAt: 0, updatedAt: 0 },
+  sendGate: false,
   isLoopback: true,   // 是否在本机打开（远程访问时「打开目录/用系统程序打开」无效，隐藏）
   editIdx: null,      // 「编辑上一条/编辑后重发」：发送时先从该条起截断对话
 };

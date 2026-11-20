@@ -319,6 +319,8 @@ class AgentServer:
         self.rag = Rag(w.get('root', '') or str(self.ws.root))
         self.memory = Memory(str(self.ws.root / '.agent' / 'memory.db'))
         self.sessions = SessionManager(str(self.ws.root / '.agent'))
+        from server.runs import RunRegistry
+        self.runs = RunRegistry(root=str(self.ws.root / '.agent' / 'runs'))
         try:
             slots = int(limits.get('model_slots', 1) or 1)
         except (TypeError, ValueError):
@@ -1293,6 +1295,18 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/search':
                 q = (qs.get('q') or [''])[0]
                 return self._json({"results": self.app.sessions.search(q)})
+            if path == '/api/run':
+                rid = (qs.get('id') or [''])[0]
+                sid = (qs.get('sid') or [''])[0]
+                req = (qs.get('req') or [''])[0]
+                run = None
+                if rid:
+                    run = self.app.runs.by_id(rid)
+                elif req:
+                    run = self.app.runs.for_request(req)
+                elif sid:
+                    run = self.app.runs.for_session(sid)
+                return self._json({'run': None if run is None else run.snapshot(0)})
             if path == '/api/jobs':
                 cid = self._client_id()
                 title = ''
@@ -2089,9 +2103,44 @@ class Handler(BaseHTTPRequestHandler):
                 continue
         return parts if len(parts) > 1 else text
 
+    def _follow_existing_run(self, run):
+        """同一个 client_req_id 再进来：只回放，不重新执行。"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self._sse_started = True
+        cursor = 0
+        idle = 0
+        while idle < 600:
+            snap = run.snapshot(cursor)
+            for ev in snap['events']:
+                try:
+                    payload = json.dumps(ev, ensure_ascii=False)
+                    self.wfile.write(f'data: {payload}\n\n'.encode('utf-8'))
+                    self.wfile.flush()
+                except Exception:
+                    return
+            cursor = snap['cursor']
+            if run.status not in ('queued', 'running', 'stopping', 'awaiting_confirm'):
+                tail = json.dumps({
+                    'type': 'run', 'id': run.id, 'status': run.status,
+                    'action': run.action,
+                }, ensure_ascii=False)
+                try:
+                    self.wfile.write(f'data: {tail}\n\n'.encode('utf-8'))
+                    self.wfile.flush()
+                except Exception:
+                    pass
+                return
+            time.sleep(0.2)
+            idle += 1
+
     def _handle_chat(self):
         app = self.app
         self._sse_started = False
+        self._owns_run = False
         token = object()          # 本请求的 busy 持有凭证（防止误放别人的锁）
         released = {'v': False}
 
@@ -2125,6 +2174,15 @@ class Handler(BaseHTTPRequestHandler):
             # 然后注入到发给模型的消息上下文里，让 AI 知道并读取附件。
             valid_att = _validate_attachments(app.ws, d.get('attachments'))
 
+            req_id = str(d.get('client_req_id') or '').strip()
+            if req_id and not re.fullmatch(r'[A-Za-z0-9_-]{8,64}', req_id):
+                return self._err(400, '非法 client_req_id')
+            # 同一个请求再进来时，不能先新建一个空会话。
+            if req_id:
+                existing = app.runs.for_request(req_id)
+                if existing is not None:
+                    return self._follow_existing_run(existing)
+
             sid = d.get('session_id') or ''
             if sid:
                 try:
@@ -2141,6 +2199,15 @@ class Handler(BaseHTTPRequestHandler):
                 app.sessions.rename(sid, new_title)
                 session.title = new_title
             app._current_sid = sid
+            req_id = str(d.get('client_req_id') or '').strip()
+            if req_id and not re.fullmatch(r'[A-Za-z0-9_-]{8,64}', req_id):
+                return self._err(400, '非法 client_req_id')
+            run, created = app.runs.get_or_create(
+                sid, self._client_id(), 'chat', req_id)
+            self._run = run
+            self._detached = False
+            if not created:
+                return self._follow_existing_run(run)
 
             user_input = self._build_user_input(message, valid_att)
             history = self._session_history(session)
@@ -2165,6 +2232,10 @@ class Handler(BaseHTTPRequestHandler):
                 if kind not in TURN_EVENTS:
                     # 开发期显眼提示；生产不因一个坏帧打死整轮对话
                     log.error('未登记的 SSE 事件类型: %s', kind)
+                current = getattr(self, '_run', None)
+                if current is not None:
+                    current.add(kind, **data)
+                    app.runs.save(current)
                 payload = json.dumps({"type": kind, **data}, ensure_ascii=False)
                 with send_lock:
                     try:
@@ -2219,6 +2290,7 @@ class Handler(BaseHTTPRequestHandler):
             box.alive = self._client_alive          # 提问时感知断开，不空等 180s
             box.owner = self._client_id()           # 局域网：只有发起者能确认/回答/停止
             app._running = agent
+            self._owns_run = True
             app._running_sid = sid                  # 断流续看：供 /api/jobs 报告“仍在运行”
             app._running_owner = box.owner
             app._run_started = time.time()
@@ -2290,8 +2362,12 @@ class Handler(BaseHTTPRequestHandler):
                 # 运行期断连检测：排队期有，运行期旧版没有——关页后 handler
                 # 会等满超时才退出，白白占线程、agent 也继续烧模型。
                 if heart % 4 == 0 and not self._client_alive():
+                    # 刷新或断线不停止、不重新执行。停止写 socket，任务继续到结束。
                     disconnected = True
-                    break
+                    self._detached = True
+                    if getattr(self, '_run', None):
+                        self._run.touch(action='连接已断开，任务仍在执行')
+                        app.runs.save(self._run)
                 # 快到时先问一声：离线大模型的长任务很常见，给用户「再等 5 分钟」的机会
                 if (not warned and app.chat_timeout_s >= 120
                         and time.monotonic() > watch['deadline'] - app.chat_timeout_s * 0.2):
@@ -2301,22 +2377,19 @@ class Handler(BaseHTTPRequestHandler):
                                   f'接近 {int(app.chat_timeout_s)} 秒上限；'
                                   f'内网大模型的长任务可点「再等 5 分钟」。'),
                          extendable=True)
-            if disconnected:
-                agent.request_stop()
-                t.join(2)
-                if t.is_alive():
-                    # 线程杀不掉（Python 无线程终止）：只记日志，等 agent
-                    # 注意到 stop 后自行退出；release_busy 在其 finally 里。
-                    log.warning('客户端断开后 agent 线程 2 秒内未退出，继续后台收尾')
-                return
             if not result_box:
                 agent.request_stop()
-                send('error',
-                     message=(f'任务执行超时（{int(app.chat_timeout_s)} 秒），已强制终止。'
-                              f'可在 设置 → 运行 调大「单轮超时」后重试。'),
-                     limit_s=int(app.chat_timeout_s))
                 t.join(2)
-                if t.is_alive():
+                still = t.is_alive()
+                if getattr(self, '_run', None):
+                    app.runs.finish(self._run, 'uncertain' if still else 'stopped')
+                send('error',
+                     message=(('已请求停止，但执行线程仍未退出，结果不确定。'
+                               if still else
+                               f'任务执行超时（{int(app.chat_timeout_s)} 秒），已强制终止。')
+                              + '可在 设置 → 运行 调大「单轮超时」后重试。'),
+                     limit_s=int(app.chat_timeout_s))
+                if still:
                     log.warning('看门狗超时后 agent 线程 2 秒内未退出，继续后台收尾')
                 return
 
@@ -2326,9 +2399,18 @@ class Handler(BaseHTTPRequestHandler):
             app._running_watch = None
 
             if 'e' in result_box:
+                if getattr(self, '_run', None):
+                    app.runs.finish(self._run, 'failed')
                 send('error', message=result_box['e'])
                 return
             r = result_box.get('r')
+            if getattr(self, '_run', None) and self._run.status == 'running':
+                if r and r.get('stop_uncertain'):
+                    app.runs.finish(self._run, 'uncertain')
+                elif r and r.get('stopped'):
+                    app.runs.finish(self._run, 'stopped')
+                else:
+                    app.runs.finish(self._run, 'done')
             if not r:
                 return
 
@@ -2359,6 +2441,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
             send('result', response=r['response'], stopped=r['stopped'],
+                 stop_uncertain=bool(r.get('stop_uncertain')),
                  artifacts=app._artifact_metas(r['artifacts']), session_id=sid,
                  elapsed_s=round(time.monotonic() - t0, 1),
                  usage=r.get('usage') or {},
@@ -2385,11 +2468,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._err(500, f'{type(e).__name__}: {e}')
         finally:
             release_busy()
-            app._running = None
-            app._running_sid = ''
-            app._running_owner = ''
-            app._running_watch = None
-            app._pending_confirm = None
+            if getattr(self, '_owns_run', False):
+                app._running = None
+                app._running_sid = ''
+                app._running_owner = ''
+                app._running_watch = None
+                app._pending_confirm = None
             _dequeue()
 
     def log_message(self, fmt, *args):

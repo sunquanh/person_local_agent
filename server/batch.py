@@ -249,13 +249,23 @@ class BatchRunner:
                     except Exception:
                         pass
             elif action == 'retry':
-                # 只重试明确失败的项。取消不是失败，不能直接再跑一遍。
+                # 只重试明确失败、且没有已落盘输出的项。
+                # 取消、结果不确定、或上次已经写出文件的，不自动再跑。
                 n = 0
                 for it in job['items']:
-                    if it['status'] != 'failed':
+                    if it['status'] != 'failed' or it.get('outcome') in (
+                            'uncertain', 'canceled'):
+                        continue
+                    arts = [a for a in (it.get('artifacts') or []) if a]
+                    if any((self.app.ws.root / a).is_file() for a in arts):
+                        it['status'] = 'skipped'
+                        it['outcome'] = 'skipped'
+                        it['error'] = ('上次已产生输出，未重复写入。'
+                                       '外部命令等无法判定的副作用也不会自动重试。')
                         continue
                     it['status'] = 'pending'
                     it['error'] = ''
+                    it['outcome'] = ''
                     n += 1
                 if n:
                     job['status'] = 'running'
@@ -411,8 +421,17 @@ class BatchRunner:
                 item['status'] = 'canceled'
                 item['error'] = item.get('error') or '已停止'
             elif r.get('stopped'):
-                item['status'] = 'canceled'
-                item['error'] = '已停止'
+                arts = [a.get('rel', '') if isinstance(a, dict) else str(a)
+                        for a in (r.get('artifacts') or [])]
+                item['artifacts'] = [a for a in arts if a]
+                if item['artifacts'] or r.get('stop_uncertain'):
+                    item['status'] = 'uncertain'
+                    item['outcome'] = 'uncertain'
+                    item['error'] = '已停止，但输出或子进程结果不确定，不会自动重试'
+                else:
+                    item['status'] = 'canceled'
+                    item['outcome'] = 'canceled'
+                    item['error'] = '已停止'
             else:
                 item['status'] = 'done'
                 item['response'] = str(r.get('response') or '')[:_KEEP_TEXT]

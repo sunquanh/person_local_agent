@@ -289,6 +289,15 @@ function appendThink(thinkEl, text) {
 let abortCtrls = [];
 let pendingCount = 0;
 let stopFlag = false;  // 手动点「停止」标记（AbortError 分支避免重复 toast）
+function clientReqId(sid) {
+  const id = (window.crypto && crypto.randomUUID
+    ? crypto.randomUUID().replace(/-/g, '')
+    : String(Date.now()) + Math.random().toString(16).slice(2)).slice(0, 24);
+  try {
+    sessionStorage.setItem(uiCacheKey(state.wsRoot, 'active-run:' + (sid || 'new')), id);
+  } catch (e) {}
+  return id;
+}
 async function send(overrideText, overrideAtts, opts) {
   const inp = $('#input');
   const text = (overrideText != null ? String(overrideText) : inp.value).trim();
@@ -297,6 +306,8 @@ async function send(overrideText, overrideAtts, opts) {
   let sendFailed = false;
   // 忙碌时也允许发送：进入服务端排队（SSE 推 queued 帧，前端显示排队条 + 可取消）
   if (!text) return;
+  if (state.sendGate) return;
+  state.sendGate = true;
   if (state.selectMode) exitSelectMode();
   const ctrl = new AbortController();
   abortCtrls.push(ctrl);
@@ -330,6 +341,7 @@ async function send(overrideText, overrideAtts, opts) {
     state.busy = pendingCount > 0;
     setBusyUI(state.busy);
     toast('创建会话失败：' + e.message, true);
+    state.sendGate = false;
     return;
   }
   // 本轮归属的会话：中途切走后，帧与收尾不再写当前视图（见 handleFrame 与 finally）
@@ -448,6 +460,7 @@ async function send(overrideText, overrideAtts, opts) {
         attachments: atts.map((a) => a.path),
         regenerate: regenerate,
         model: currentModelOv() || undefined,
+        client_req_id: clientReqId(runSid),
       }),
       signal: ctrl.signal,
     });
@@ -523,6 +536,7 @@ async function send(overrideText, overrideAtts, opts) {
       }
     }
   } finally {
+    state.sendGate = false;
     clearWait();
     pendingCount--;
     abortCtrls = abortCtrls.filter((c) => c !== ctrl);
@@ -683,7 +697,9 @@ function handleFrame(f, botEl, thinkEl, ctx) {
         botEl.insertAdjacentHTML('beforeend', changeCardHtml(f.snapshot));
       }
       $('#queueBar').classList.add('hidden');
-      if (state.task && state.task.status !== 'uncertain') {
+      if (f.stop_uncertain) {
+        setTask('uncertain', '已请求停止，但有步骤没能确认结束');
+      } else if (state.task && state.task.status !== 'uncertain') {
         setTask(f.stopped ? 'stopped' : 'done',
                 f.stopped ? '任务已停止' : '本轮完成');
       }

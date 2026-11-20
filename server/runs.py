@@ -9,9 +9,13 @@
 2. **运行登记**：`RunRegistry` 记录每个会话当前/最近的运行，供
    `/api/run` 与侧栏状态使用（刷新页面也能看到"这个会话还在跑"）。
 """
+import json
 import threading
 import time
 import uuid
+from pathlib import Path
+
+_ACTIVE = {'queued', 'running', 'stopping', 'awaiting_confirm'}
 
 
 class ModelGate:
@@ -86,7 +90,29 @@ class Run:
         self.finished_at = 0.0
         self.events = []
         self.text_len = 0
+        self.client_req_id = ''
+        self.action = ''
+        self.updated_at = self.started_at
         self._lock = threading.Lock()
+
+    def touch(self, status=None, action=None):
+        if status:
+            self.status = status
+        if action is not None:
+            self.action = action
+        self.updated_at = time.time()
+
+    def to_disk(self) -> dict:
+        with self._lock:
+            events = list(self.events[-200:])
+            text_len = self.text_len
+        return {
+            'id': self.id, 'sid': self.sid, 'owner': self.owner, 'kind': self.kind,
+            'status': self.status, 'started_at': self.started_at,
+            'finished_at': self.finished_at, 'client_req_id': self.client_req_id,
+            'action': self.action, 'updated_at': self.updated_at,
+            'text_len': text_len, 'events': events,
+        }
 
     def add(self, kind: str, **data):
         ev = {"type": kind, **data}
@@ -106,7 +132,9 @@ class Run:
         return {"id": self.id, "sid": self.sid, "status": self.status,
                 "kind": self.kind, "started_at": self.started_at,
                 "finished_at": self.finished_at, "events": evs,
-                "cursor": n, "text_len": self.text_len}
+                "cursor": n, "text_len": self.text_len,
+                "client_req_id": self.client_req_id, "action": self.action,
+                "updated_at": self.updated_at}
 
     def finish(self, status: str = 'done'):
         self.status = status
@@ -116,12 +144,93 @@ class Run:
 class RunRegistry:
     """按会话保留最近一次运行（含正在运行的那个）。"""
 
-    def __init__(self, keep: int = 20):
+    def __init__(self, keep: int = 20, root: str = None):
         self._lock = threading.Lock()
         self._runs = {}         # sid -> Run（最近一次）
         self._running = {}      # run_id -> Run
+        self._by_req = {}       # client_req_id -> Run
         self._order = []
         self.keep = max(1, int(keep))
+        self.root = Path(root) if root else None
+        if self.root:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.load()
+
+    def load(self):
+        """读盘。进程已经不在了，仍标着 running 的记录改成 interrupted。"""
+        if not self.root or not self.root.is_dir():
+            return
+        changed = []
+        for path in self.root.glob('*.json'):
+            if path.name.endswith('.tmp'):
+                continue
+            try:
+                data = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            run = Run(str(data.get('sid') or ''), str(data.get('owner') or ''),
+                      str(data.get('kind') or 'chat'))
+            run.id = str(data.get('id') or run.id)
+            run.status = str(data.get('status') or 'running')
+            run.started_at = float(data.get('started_at') or run.started_at)
+            run.finished_at = float(data.get('finished_at') or 0)
+            run.client_req_id = str(data.get('client_req_id') or '')
+            run.action = str(data.get('action') or '')
+            run.updated_at = float(data.get('updated_at') or run.started_at)
+            run.text_len = int(data.get('text_len') or 0)
+            run.events = list(data.get('events') or [])
+            if run.status in _ACTIVE:
+                run.status = 'interrupted'
+                run.action = '进程已退出，任务没有可靠的结束结果'
+                run.finished_at = time.time()
+                changed.append(run)
+            self._remember(run)
+        for run in changed:
+            self.save(run)
+
+    def _remember(self, run: Run):
+        self._runs[run.sid] = run
+        if run.client_req_id:
+            self._by_req[run.client_req_id] = run
+        if run.status == 'running':
+            self._running[run.id] = run
+
+    def save(self, run: Run):
+        if not self.root:
+            return
+        path = self.root / f'{run.id}.json'
+        tmp = self.root / f'{run.id}.json.tmp'
+        tmp.write_text(json.dumps(run.to_disk(), ensure_ascii=False), encoding='utf-8')
+        tmp.replace(path)
+
+    def get_or_create(self, sid: str, owner: str = '', kind: str = 'chat',
+                      client_req_id: str = ''):
+        """同一 client_req_id 只登记一次。返回 (run, created)。"""
+        with self._lock:
+            if client_req_id and client_req_id in self._by_req:
+                return self._by_req[client_req_id], False
+            run = Run(sid, owner, kind)
+            run.client_req_id = client_req_id or run.id
+            self._runs[sid] = run
+            self._running[run.id] = run
+            self._by_req[run.client_req_id] = run
+            self._order.append(run.id)
+            while len(self._order) > self.keep:
+                old = self._order.pop(0)
+                self._running.pop(old, None)
+            self.save(run)
+            return run, True
+
+    def by_id(self, run_id: str):
+        with self._lock:
+            for run in self._runs.values():
+                if run.id == run_id:
+                    return run
+            return self._running.get(run_id)
+
+    def for_request(self, client_req_id: str):
+        with self._lock:
+            return self._by_req.get(client_req_id)
 
     def create(self, sid: str, owner: str = '', kind: str = 'chat') -> Run:
         run = Run(sid, owner, kind)
@@ -139,6 +248,7 @@ class RunRegistry:
         run.finish(status)
         with self._lock:
             self._running.pop(run.id, None)
+        self.save(run)
 
     def for_session(self, sid: str):
         with self._lock:
