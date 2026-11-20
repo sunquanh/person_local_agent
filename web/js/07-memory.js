@@ -644,7 +644,7 @@ $('#btnSettings').onclick = async () => {
     b.onclick = () => mcpApplyTemplate(b.dataset.tpl);
   });
   $('#stSave').onclick = async () => {
-    const r = await fetch('/api/settings', { method: 'POST',
+    let r; try { r = await fetch('/api/settings', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: { base_url: $('#stUrl').value.trim(), name: $('#stModel').value.trim(),
@@ -671,7 +671,8 @@ $('#btnSettings').onclick = async () => {
                   rules: $('#stRules').value.split('\n').map((s) => s.trim()).filter(Boolean) },
         mcp: [...document.querySelectorAll('.mcp-cb')]
                .map((c) => ({ name: c.dataset.name, enabled: c.checked })) }) });
-    const d = await r.json();
+    } catch (e) { return toast('保存失败：' + e.message, true); }
+    const d = await r.json().catch(() => ({}));
     if (!r.ok) return toast(d.error || '保存失败', true);
     const wsr = d.workspace || {};
     if (wsr.restart_required) {

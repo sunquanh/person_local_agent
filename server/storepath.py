@@ -230,10 +230,17 @@ def load_ui(workspace_root):
 
 
 def save_ui(workspace_root, patch):
-    current = load_ui(workspace_root)
+    # 保留未知字段：读原始 JSON，只覆盖 patch 里的已知键。
+    # 文件损坏时 _read_json 抛 StorePathError，绝不静默覆盖成空白。
+    path = os.path.join(workspace_root, '.agent', 'ui.json')
+    if os.path.isfile(path):
+        current = _read_json(path)
+    else:
+        current = {}
+    for key, val in _blank_ui().items():
+        current.setdefault(key, val)
     for key in _UI_KEYS:
         if key in (patch or {}):
             current[key] = patch[key]
-    path = os.path.join(workspace_root, '.agent', 'ui.json')
     _write_json(path, current)
     return current

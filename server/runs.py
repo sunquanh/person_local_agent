@@ -157,10 +157,14 @@ class RunRegistry:
             self.load()
 
     def load(self):
-        """读盘。进程已经不在了，仍标着 running 的记录改成 interrupted。"""
+        """读盘。进程已经不在了，仍标着 running 的记录改成 interrupted。
+
+        同一会话有多份历史文件时必须留最新一条：glob 顺序任意，
+        直接覆盖会让旧的 done 盖掉本次 interrupted。
+        """
         if not self.root or not self.root.is_dir():
             return
-        changed = []
+        loaded = []
         for path in self.root.glob('*.json'):
             if path.name.endswith('.tmp'):
                 continue
@@ -179,17 +183,34 @@ class RunRegistry:
             run.updated_at = float(data.get('updated_at') or run.started_at)
             run.text_len = int(data.get('text_len') or 0)
             run.events = list(data.get('events') or [])
+            loaded.append((run, path))
+        loaded.sort(key=lambda rp: (rp[0].started_at, rp[0].updated_at))
+        # 只保留最近 keep 条，更旧的文件清掉，避免重启后越积越多
+        if len(loaded) > self.keep:
+            for _run, path in loaded[:-self.keep]:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            loaded = loaded[-self.keep:]
+        changed = []
+        for run, _path in loaded:
             if run.status in _ACTIVE:
                 run.status = 'interrupted'
                 run.action = '进程已退出，任务没有可靠的结束结果'
                 run.finished_at = time.time()
                 changed.append(run)
             self._remember(run)
+            if run.id not in self._order:
+                self._order.append(run.id)
         for run in changed:
             self.save(run)
 
     def _remember(self, run: Run):
-        self._runs[run.sid] = run
+        old = self._runs.get(run.sid)
+        if old is None or (run.started_at, run.updated_at) >= (
+                old.started_at, old.updated_at):
+            self._runs[run.sid] = run
         if run.client_req_id:
             self._by_req[run.client_req_id] = run
         if run.status == 'running':

@@ -234,7 +234,20 @@ function cacheUiLocal(patch) {
 }
 async function persistUi(patch) {
   // 浏览器里只留当前工作区的临时副本。写入成功与否以工作目录里的 ui.json 为准。
-  cacheUiLocal(patch || {});
+  // 保存失败必须回滚缓存，否则刷新后会沿用未落盘的临时值。
+  patch = patch || {};
+  const ws = state.wsRoot || '';
+  const prev = {};
+  try {
+    if (patch.theme) prev.theme = localStorage.getItem(uiCacheKey(ws, 'theme'));
+    if (patch.last_session) prev.lastSession = localStorage.getItem(uiCacheKey(ws, 'lastSession'));
+    if (patch.model_overrides) prev.modelOverrides = localStorage.getItem(uiCacheKey(ws, 'modelOverrides'));
+    if (patch.panel_widths) {
+      if (patch.panel_widths.sb) prev['sb-w'] = localStorage.getItem(uiCacheKey(ws, 'sb-w'));
+      if (patch.panel_widths.rp) prev['rp-w'] = localStorage.getItem(uiCacheKey(ws, 'rp-w'));
+    }
+  } catch (e) {}
+  cacheUiLocal(patch);
   let ok = false;
   try {
     const r = await fetch('/api/ui', {
@@ -245,6 +258,15 @@ async function persistUi(patch) {
     ok = !!r.ok;
   } catch (e) {
     ok = false;
+  }
+  if (!ok) {
+    try {
+      for (const k of Object.keys(prev)) {
+        if (prev[k] == null) localStorage.removeItem(uiCacheKey(ws, k));
+        else localStorage.setItem(uiCacheKey(ws, k), prev[k]);
+      }
+    } catch (e) {}
+    if (patch.theme) applyTheme();
   }
   const msg = uiSaveMessage(ok);
   if (msg) toast(msg, true);

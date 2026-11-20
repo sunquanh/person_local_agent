@@ -19,6 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import logsetup
+from .llm import LLMError
 from .tools import ASK_FORBIDDEN, CODE_TOOLS, READ_ONLY_TOOLS, WRITE_TOOLS, ToolRegistry
 
 log = logsetup.get('core')
@@ -396,8 +397,16 @@ class Agent:
                 if self.on_think:
                     self.on_think(t)
 
-            r = self.llm.chat(messages, tools=tools, on_delta=self.on_delta,
-                              on_reason=_on_reason)
+            try:
+                r = self.llm.chat(messages, tools=tools, on_delta=self.on_delta,
+                                  on_reason=_on_reason)
+            except LLMError:
+                # 用户点停止时 abort() 让在途请求抛“请求被中止”：
+                # 这是主动停止，不是失败。已产出文件时结果不确定。
+                if self.stop_requested():
+                    return self._finish(tool_steps, artifacts, stopped=True,
+                                        stop_uncertain=bool(artifacts))
+                raise
 
             if r.get('usage'):
                 self._usage = r['usage']

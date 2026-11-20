@@ -647,69 +647,74 @@ class AgentServer:
         - 前端 api_key 留空 = **保持不变**（旧版会把空串写进去，直接抹掉用户 key）
         - 磁盘上 api_key 永远是 ENC: 密文，明文只存在 self._api_key_plain
         """
-        if model is not None:
-            m = self.config.setdefault('model', {})
-            new_key = str(model.get('api_key') or '').strip()
-            for k, v in model.items():
-                if k != 'api_key':
-                    m[k] = v
-            if new_key:                       # 留空表示不修改
-                if new_key.startswith('ENC:'):
-                    m['api_key'] = new_key
-                    self._api_key_plain = self._decrypt_key(new_key)
-                else:
-                    try:
-                        from encrypt_key import encrypt_key
-                        enc_key = 'ENC:' + encrypt_key(new_key)
-                    except Exception as e:
-                        # 加密失败绝不退回明文落盘：直接拒绝本次保存，磁盘上
-                        # 的旧密文保持不变（否则明文 key 会随 _persist 进 config.json）。
-                        log.error('API Key 加密失败，已拒绝保存: %s', e)
-                        raise ValueError('密钥加密失败（密钥文件不可写？），已拒绝保存，请检查后重试')
-                    m['api_key'] = enc_key
-                    self._api_key_plain = new_key
-            self.llm = self._make_llm()
-            log.info('模型配置已更新: %s @ %s（key=%s）',
-                     m.get('name'), m.get('base_url'),
-                     '已设置' if self._api_key_plain else '未设置')
-        if prompt is not None:
-            # 清洗后写回 config：空规则剔除、去首尾空格
-            p = self.config.setdefault('prompt', {})
-            role = str((prompt or {}).get('role') or '').strip()
-            rules = [str(r).strip() for r in ((prompt or {}).get('rules') or [])
-                     if str(r).strip()]
-            p['role'] = role
-            p['rules'] = rules
-            self.agent_role = role
-            self.agent_rules = rules
-        if limits is not None:
-            self.config.setdefault('limits', {}).update(limits)
-            self.max_upload_mb = float(self.config['limits'].get('max_upload_mb', 50))
-            self.chat_timeout_s = float(self.config['limits'].get('chat_timeout_s', 600))
-            if 'llm_timeout_s' in (limits or {}):
-                # 模型超时改了要热切换 LLM 客户端，否则得重启才生效
+        _snap = self._snapshot_config_state()
+        try:
+            if model is not None:
+                m = self.config.setdefault('model', {})
+                new_key = str(model.get('api_key') or '').strip()
+                for k, v in model.items():
+                    if k != 'api_key':
+                        m[k] = v
+                if new_key:                       # 留空表示不修改
+                    if new_key.startswith('ENC:'):
+                        m['api_key'] = new_key
+                        self._api_key_plain = self._decrypt_key(new_key)
+                    else:
+                        try:
+                            from encrypt_key import encrypt_key
+                            enc_key = 'ENC:' + encrypt_key(new_key)
+                        except Exception as e:
+                            # 加密失败绝不退回明文落盘：直接拒绝本次保存，磁盘上
+                            # 的旧密文保持不变（否则明文 key 会随 _persist 进 config.json）。
+                            log.error('API Key 加密失败，已拒绝保存: %s', e)
+                            raise ValueError('密钥加密失败（密钥文件不可写？），已拒绝保存，请检查后重试')
+                        m['api_key'] = enc_key
+                        self._api_key_plain = new_key
                 self.llm = self._make_llm()
-        if rag is not None:
-            self.config.setdefault('rag', {}).update(rag)
-        if memory is not None:
-            # 记忆提取开关（B6）：离线单卡场景关掉可避免后台再占一次推理
-            mm = self.config.setdefault('memory', {})
-            mm['extract'] = bool(memory.get('extract', True))
-        if security is not None:
-            from agent.tools import PROFILES
-            sec = dict(security or {})
-            # session_allow 是内存态（本次运行批准的命令前缀），不落盘
-            if 'session_allow' in sec:
-                self.session_allow = [str(x).strip().lower()
-                                      for x in (sec.pop('session_allow') or [])
-                                      if str(x).strip()][:50]
-            if str(sec.get('profile') or 'suggest') not in PROFILES:
-                sec['profile'] = 'suggest'
-            self.config.setdefault('security', {}).update(sec)
-            log.info('安全配置已更新: profile=%s, auto_approve=%s, 已记住 %s 个命令前缀',
-                     self.config['security'].get('profile'),
-                     self.config['security'].get('auto_approve'), len(self.session_allow))
-        self._persist()
+                log.info('模型配置已更新: %s @ %s（key=%s）',
+                         m.get('name'), m.get('base_url'),
+                         '已设置' if self._api_key_plain else '未设置')
+            if prompt is not None:
+                # 清洗后写回 config：空规则剔除、去首尾空格
+                p = self.config.setdefault('prompt', {})
+                role = str((prompt or {}).get('role') or '').strip()
+                rules = [str(r).strip() for r in ((prompt or {}).get('rules') or [])
+                         if str(r).strip()]
+                p['role'] = role
+                p['rules'] = rules
+                self.agent_role = role
+                self.agent_rules = rules
+            if limits is not None:
+                self.config.setdefault('limits', {}).update(limits)
+                self.max_upload_mb = float(self.config['limits'].get('max_upload_mb', 50))
+                self.chat_timeout_s = float(self.config['limits'].get('chat_timeout_s', 600))
+                if 'llm_timeout_s' in (limits or {}):
+                    # 模型超时改了要热切换 LLM 客户端，否则得重启才生效
+                    self.llm = self._make_llm()
+            if rag is not None:
+                self.config.setdefault('rag', {}).update(rag)
+            if memory is not None:
+                # 记忆提取开关（B6）：离线单卡场景关掉可避免后台再占一次推理
+                mm = self.config.setdefault('memory', {})
+                mm['extract'] = bool(memory.get('extract', True))
+            if security is not None:
+                from agent.tools import PROFILES
+                sec = dict(security or {})
+                # session_allow 是内存态（本次运行批准的命令前缀），不落盘
+                if 'session_allow' in sec:
+                    self.session_allow = [str(x).strip().lower()
+                                          for x in (sec.pop('session_allow') or [])
+                                          if str(x).strip()][:50]
+                if str(sec.get('profile') or 'suggest') not in PROFILES:
+                    sec['profile'] = 'suggest'
+                self.config.setdefault('security', {}).update(sec)
+                log.info('安全配置已更新: profile=%s, auto_approve=%s, 已记住 %s 个命令前缀',
+                         self.config['security'].get('profile'),
+                         self.config['security'].get('auto_approve'), len(self.session_allow))
+            self._persist()
+        except Exception:
+            self._restore_config_state(_snap)
+            raise
 
     def save_mcp_server(self, srv: dict, original_name: str = None):
         """设置页增删改 MCP server：校验 -> 写 config -> 立即重连。
@@ -786,8 +791,16 @@ class AgentServer:
             log.error('MCP 环境变量加密失败，已拒绝保存: %s', e)
             raise ValueError('MCP 密钥加密失败（密钥文件不可写？），已拒绝保存，请检查后重试')
         servers.append(rec)
+        _old_servers = mcfg.get('servers')
         mcfg['servers'] = servers
-        self._persist()
+        try:
+            self._persist()
+        except Exception:
+            if _old_servers is None:
+                mcfg.pop('servers', None)
+            else:
+                mcfg['servers'] = _old_servers
+            raise
         from agent.mcp import manager
         manager.configure(self._servers_for_runtime(servers))
         log.info('MCP 配置已保存: %s -> %s %s', old_name or '(新增)', command,
@@ -804,8 +817,16 @@ class AgentServer:
         keep = [x for x in servers if str(x.get('name') or '') != name]
         if len(keep) == len(servers):
             raise ValueError(f'没有找到 MCP 服务：{name}')
+        _old_servers = mcfg.get('servers')
         mcfg['servers'] = keep
-        self._persist()
+        try:
+            self._persist()
+        except Exception:
+            if _old_servers is None:
+                mcfg.pop('servers', None)
+            else:
+                mcfg['servers'] = _old_servers
+            raise
         from agent.mcp import manager
         manager.configure(self._servers_for_runtime(keep))
         log.info('MCP 已删除: %s', name)
@@ -823,33 +844,126 @@ class AgentServer:
             nm = str(s.get('name') or '')
             if nm in flag:
                 s['enabled'] = flag[nm]
+        _old_servers = mcfg.get('servers')
         mcfg['servers'] = servers
-        self._persist()
+        try:
+            self._persist()
+        except Exception:
+            if _old_servers is None:
+                mcfg.pop('servers', None)
+            else:
+                mcfg['servers'] = _old_servers
+            raise
         from agent.mcp import manager
         manager.configure(self._servers_for_runtime(servers))
         log.info('MCP 配置已更新: %s',
                  ', '.join(f"{s.get('name')}={'开' if s.get('enabled', True) else '关'}"
                            for s in servers) or '（空）')
 
+    def _snapshot_config_state(self):
+        """保存失败回滚用：配置与派生运行时状态的快照。"""
+        import copy as _copy
+        return {
+            'config': _copy.deepcopy(self.config),
+            'llm': self.llm,
+            'api_key_plain': self._api_key_plain,
+            'agent_role': self.agent_role,
+            'agent_rules': list(self.agent_rules),
+            'max_upload_mb': self.max_upload_mb,
+            'chat_timeout_s': self.chat_timeout_s,
+            'session_allow': list(self.session_allow),
+        }
+
+    def _restore_config_state(self, snap):
+        self.config = snap['config']
+        self.llm = snap['llm']
+        self._api_key_plain = snap['api_key_plain']
+        self.agent_role = snap['agent_role']
+        self.agent_rules = snap['agent_rules']
+        self.max_upload_mb = snap['max_upload_mb']
+        self.chat_timeout_s = snap['chat_timeout_s']
+        self.session_allow = snap['session_allow']
+
     def _persist(self):
-        """原子写配置。密钥在调用前已是 ENC 形态。不在日志里打印正文。"""
+        """原子写配置。密钥在调用前已是 ENC 形态。不在日志里打印正文。
+
+        写盘失败必须抛错：吞掉异常会让上层误报“已保存并生效”，
+        内存与磁盘从此不一致（配置假保存）。
+
+        多路径必须全有或全无：先把所有 tmp 写完再统一 replace；
+        任一 replace 失败时把已 replace 的路径用旧内容写回，
+        否则内存回滚后磁盘会一新一旧。mkstemp 残留一律清理。
+        """
         paths = list(self._config_paths or [])
         if self.config_path and self.config_path not in paths:
             paths.append(self.config_path)
         if not paths:
             return
+        import tempfile
+        payload = json.dumps(self.config, ensure_ascii=False, indent=2)
+        # 先备份每路旧内容（不存在记 None，恢复时删除）；读失败直接
+        # 中止，此时还没动过任何一路，不会留下半新半旧。
+        backups = {}
         try:
-            import tempfile
-            payload = json.dumps(self.config, ensure_ascii=False, indent=2)
+            for p in paths:
+                try:
+                    with open(p, 'rb') as f:
+                        backups[p] = f.read()
+                except FileNotFoundError:
+                    backups[p] = None
+        except Exception as e:
+            log.error('保存配置失败: %s', type(e).__name__)
+            raise OSError(f'保存配置失败（未写入磁盘）: {type(e).__name__}') from e
+        tmps = []  # [(tmp, dest)]，写 tmp 阶段失败也要靠它清理
+        try:
             for p in paths:
                 d = os.path.dirname(p) or '.'
                 os.makedirs(d, exist_ok=True)
                 fd, tmp = tempfile.mkstemp(dir=d, prefix='config.', suffix='.tmp')
+                tmps.append((tmp, p))
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     f.write(payload)
-                os.replace(tmp, p)
+            replaced = []
+            try:
+                for tmp, p in tmps:
+                    os.replace(tmp, p)
+                    replaced.append(p)
+            except Exception:
+                # 把已换成新配置的路径逐个写回旧内容；恢复本身失败
+                # 只记日志，不掩盖最初的失败原因。
+                for p in replaced:
+                    try:
+                        old = backups.get(p)
+                        if old is None:
+                            try:
+                                os.unlink(p)
+                            except FileNotFoundError:
+                                pass
+                        else:
+                            d = os.path.dirname(p) or '.'
+                            fd, rtmp = tempfile.mkstemp(
+                                dir=d, prefix='config.', suffix='.tmp')
+                            try:
+                                with os.fdopen(fd, 'wb') as f:
+                                    f.write(old)
+                                os.replace(rtmp, p)
+                            finally:
+                                try:
+                                    os.unlink(rtmp)
+                                except OSError:
+                                    pass
+                    except Exception:
+                        log.error('保存配置失败后恢复旧配置也失败: %s', p)
+                raise
         except Exception as e:
             log.error('保存配置失败: %s', type(e).__name__)
+            raise OSError(f'保存配置失败（未写入磁盘）: {type(e).__name__}') from e
+        finally:
+            for tmp, _p in tmps:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
     def _redacted_config(self) -> dict:
         """配置快照（**脱敏**）：api_key / MCP 环境变量 / 访问令牌一律不外带。
@@ -1827,6 +1941,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._err(404, str(e))
                 except Exception as e:
                     return self._err(500, f'撤销失败: {e}')
+                if r.get('refused'):
+                    # 文件已被用户改过、正确拒绝覆盖：不得标记已撤销，
+                    # 更不能让前端弹“已撤销”。
+                    return self._json({"ok": False, **r}, 409)
                 try:
                     self.app.sessions.mark_turn_undone(sid, turn)
                 except Exception as e:
@@ -1861,9 +1979,14 @@ class Handler(BaseHTTPRequestHandler):
                     if not same_cfg:
                         # 与「已保存值」比，而不是与运行中的 root 比：
                         # 否则改回当前目录时永远写不回去，restart_required 会卡在 true
+                        _old_root = (self.app.config.get('workspace') or {}).get('root')
                         self.app.config.setdefault('workspace', {})['root'] = \
                             str(cand.root)
-                        self.app._persist()
+                        try:
+                            self.app._persist()
+                        except Exception:
+                            self.app.config.setdefault('workspace', {})['root'] = _old_root
+                            raise
                         if self.app.program_dir:
                             from server.storepath import write_pointer
                             write_pointer(self.app.program_dir, str(cand.root))
@@ -2104,16 +2227,26 @@ class Handler(BaseHTTPRequestHandler):
         return parts if len(parts) > 1 else text
 
     def _follow_existing_run(self, run):
-        """同一个 client_req_id 再进来：只回放，不重新执行。"""
+        """同一个 client_req_id 再进来：只回放，不重新执行。
+
+        跟随到 run 结束为止（上限对齐单轮超时），期间发心跳保活；
+        旧版 600×0.2 秒硬上限会让长任务重连后约 120 秒断流。
+        """
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
         self.send_header('Cache-Control', 'no-cache')
         self.send_header('Connection', 'close')
         self.end_headers()
         self._sse_started = True
+        try:
+            self.connection.settimeout(None)
+        except Exception:
+            pass
         cursor = 0
-        idle = 0
-        while idle < 600:
+        deadline = time.monotonic() + float(
+            getattr(self.app, 'chat_timeout_s', 600) or 600)
+        last_ping = time.monotonic()
+        while time.monotonic() < deadline:
             snap = run.snapshot(cursor)
             for ev in snap['events']:
                 try:
@@ -2134,8 +2267,14 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 return
+            if time.monotonic() - last_ping >= 10:
+                last_ping = time.monotonic()
+                try:
+                    self.wfile.write(b': ping\n\n')
+                    self.wfile.flush()
+                except Exception:
+                    return
             time.sleep(0.2)
-            idle += 1
 
     def _handle_chat(self):
         app = self.app
@@ -2317,13 +2456,35 @@ class Handler(BaseHTTPRequestHandler):
                         'chat', timeout=app.chat_timeout_s,
                         stop=lambda: agent.stop_requested())
                     if not held:
-                        result_box['e'] = '未获得模型槽位（已停止或等待超时）'
+                        if agent.stop_requested():
+                            result_box['r'] = {
+                                'response': '', 'reasoning': '',
+                                'tool_steps': [], 'artifacts': [],
+                                'stopped': True, 'stop_uncertain': False,
+                                'usage': {}, 'todos': [], 'context': {},
+                                'citations': [],
+                            }
+                            result_box['ok'] = True
+                        else:
+                            result_box['e'] = '未获得模型槽位（等待超时）'
                         return
                     result_box['r'] = agent.run(history, user_input, mode=mode)
                     result_box['ok'] = True
                 except LLMError as e:
-                    result_box['e'] = str(e)
-                    log.warning('对话失败(LLM): %s', e)
+                    if agent.stop_requested():
+                        # 主动停止触发的中止不是失败：走 result 帧，
+                        # run 标 stopped（core 正常路径已先接住，这里兜底）。
+                        result_box['r'] = {
+                            'response': '', 'reasoning': '',
+                            'tool_steps': [], 'artifacts': [],
+                            'stopped': True, 'stop_uncertain': False,
+                            'usage': {}, 'todos': [], 'context': {},
+                            'citations': [],
+                        }
+                        result_box['ok'] = True
+                    else:
+                        result_box['e'] = str(e)
+                        log.warning('对话失败(LLM): %s', e)
                 except Exception as e:
                     result_box['e'] = f'{type(e).__name__}: {e}'
                     log.exception('对话失败: %s', e)

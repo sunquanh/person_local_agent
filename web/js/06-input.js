@@ -328,6 +328,10 @@ async function undoTurn(turn) {
         body: JSON.stringify({ session_id: state.cur, turn }),
       });
       const d = await r.json();
+      if (d.refused) {
+        toast('未撤销：文件已被修改（' + (d.conflicts || []).join('、') + '），已保留当前文件', true);
+        return;
+      }
       if (!r.ok) throw new Error(d.error || '撤销失败');
       toast(`↩ 已撤销：还原 ${d.restored || 0} 个，删除 ${d.removed || 0} 个`);
       await selectSession(state.cur);

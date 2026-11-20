@@ -228,6 +228,9 @@ fetch('/api/health').then((r) => r.json()).then((d) => {
     if (!w.rp) localStorage.removeItem(uiCacheKey(state.wsRoot, 'rp-w'));
   } catch (e) {}
 }).catch(() => {
+  // 服务器读不到 ui.json 时不能拿未确认缓存当真值：清主题缓存回默认。
+  try { localStorage.removeItem(uiCacheKey(state.wsRoot, 'theme')); } catch (e) {}
+  applyTheme();
   toast(uiSaveMessage(false), true);
 }).finally(() => {
   loadSessions().then(openRememberedSession);

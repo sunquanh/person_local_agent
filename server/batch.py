@@ -251,13 +251,19 @@ class BatchRunner:
             elif action == 'retry':
                 # 只重试明确失败、且没有已落盘输出的项。
                 # 取消、结果不确定、或上次已经写出文件的，不自动再跑。
+                # 已取消的作业整体不复活（取消期间被异常改成 failed 的项
+                # 也不能借重试重跑）。
                 n = 0
+                if job.get('status') == 'canceled':
+                    self._persist(job)
+                    return job
                 for it in job['items']:
                     if it['status'] != 'failed' or it.get('outcome') in (
                             'uncertain', 'canceled'):
                         continue
                     arts = [a for a in (it.get('artifacts') or []) if a]
-                    if any((self.app.ws.root / a).is_file() for a in arts):
+                    if (any((self.app.ws.root / a).is_file() for a in arts)
+                            or self._has_unregistered_output(job, it)):
                         it['status'] = 'skipped'
                         it['outcome'] = 'skipped'
                         it['error'] = ('上次已产生输出，未重复写入。'
@@ -275,6 +281,52 @@ class BatchRunner:
                 raise ValueError(f'未知动作: {action}')
             self._persist(job)
         return job
+
+    def _has_unregistered_output(self, job: dict, item: dict) -> bool:
+        """输出目录里已有与输入同 stem 的文件（写过但未登记为产物）。
+
+        名字只认 stem 相等或以 stem 开头（大小写不敏感），不用子串，
+        否则短 stem（如 a）会误命中 summary 之类无关文件。另按 item
+        的 started_at 过滤 mtime：开跑之前就存在的同名旧文件不是
+        本次写出的，不算；started_at 缺失/不可解析时退回只按名字判。
+        """
+        out_dir = str(job.get('output_dir') or '').strip()
+        if not out_dir:
+            return False
+        stem = Path(str(item.get('file') or '')).stem
+        if not stem:
+            return False
+        stem_cf = stem.casefold()
+        started_epoch = None
+        raw_started = str(item.get('started_at') or '').strip()
+        if raw_started:
+            try:
+                started_epoch = time.mktime(
+                    time.strptime(raw_started, '%Y-%m-%d %H:%M:%S'))
+            except (ValueError, OverflowError):
+                started_epoch = None
+        base = self.app.ws.root / out_dir
+        try:
+            if not base.is_dir():
+                return False
+            for p in base.rglob('*'):
+                if not p.is_file():
+                    continue
+                p_stem_cf = p.stem.casefold()
+                if not (p_stem_cf == stem_cf
+                        or p_stem_cf.startswith(stem_cf)):
+                    continue
+                if started_epoch is not None:
+                    try:
+                        mtime = p.stat().st_mtime
+                    except OSError:
+                        continue
+                    if mtime < started_epoch - 2:
+                        continue
+                return True
+        except OSError:
+            return False
+        return False
 
     def to_csv(self, job_id: str) -> str:
         job = self.get(job_id)
@@ -305,6 +357,7 @@ class BatchRunner:
                     if it['status'] == 'pending':
                         it['status'] = 'running'
                         it['error'] = ''
+                        it['started_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
                         self._cur = (job['id'], it['idx'])
                         self._persist(job)
                         return job, it
@@ -338,8 +391,25 @@ class BatchRunner:
             except Exception as e:
                 log.exception('批量作业执行异常: %s', item.get('file'))
                 with self._lock:
-                    item['status'] = 'failed'
-                    item['error'] = f'{type(e).__name__}: {e}'
+                    # 取消期间的异常（多为 abort 中止）绝不能盖成 failed，
+                    # 否则点重试会把已取消的项重新执行。
+                    if (job.get('status') == 'canceled'
+                            or item.get('status') == 'canceled'):
+                        item['status'] = 'canceled'
+                        item['outcome'] = 'canceled'
+                        item['error'] = item.get('error') or '已停止'
+                    elif '中止' in str(e):
+                        if item.get('artifacts'):
+                            item['status'] = 'uncertain'
+                            item['outcome'] = 'uncertain'
+                            item['error'] = '已停止，但输出结果不确定，不会自动重试'
+                        else:
+                            item['status'] = 'canceled'
+                            item['outcome'] = 'canceled'
+                            item['error'] = '已停止'
+                    else:
+                        item['status'] = 'failed'
+                        item['error'] = f'{type(e).__name__}: {e}'
             finally:
                 # 收尾落盘失败也不能杀死 worker 线程：否则整个批量停摆且无声。
                 # _persist/_ledger 自身的异常在此消化、记日志，循环继续。
@@ -419,7 +489,12 @@ class BatchRunner:
         with self._lock:
             if job.get('status') == 'canceled':
                 item['status'] = 'canceled'
+                item['outcome'] = 'canceled'
                 item['error'] = item.get('error') or '已停止'
+                arts = [a.get('rel', '') if isinstance(a, dict) else str(a)
+                        for a in (r.get('artifacts') or [])]
+                if any(arts):
+                    item['artifacts'] = [a for a in arts if a]
             elif r.get('stopped'):
                 arts = [a.get('rel', '') if isinstance(a, dict) else str(a)
                         for a in (r.get('artifacts') or [])]
