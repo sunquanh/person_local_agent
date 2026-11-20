@@ -692,7 +692,7 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .pal-foot{padding:8px 17px;border-top:1px solid var(--border);font-size:11px;letter-spacing:.02em}
 
 /* ── toast ── */
-#toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%);background:var(--toast-bg);color:#fff;
+#toast{position:fixed;left:50%;bottom:108px;transform:translateX(-50%);background:var(--toast-bg);color:#fff;
   padding:10px 18px;border-radius:var(--r-md);z-index:99;font-size:13px;max-width:82%;
   box-shadow:var(--shadow-md);animation:fadeIn .15s ease;
   display:flex;align-items:center;gap:8px}
