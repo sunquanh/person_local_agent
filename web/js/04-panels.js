@@ -514,11 +514,6 @@ function paintScope(d) {
     wd.textContent = state.wsRoot ? ('目录 ' + state.wsRoot) : '目录未设置';
     wd.title = state.wsRoot || '';
   }
-  const scope = $('#scopeNote');
-  if (scope) {
-    const base = state.modelBase || '未配置的模型地址';
-    scope.textContent = `发给模型的对话、附件和工具读到的内容会发往 ${base}。本机执行不等于内容不出机。`;
-  }
   paintPerm();
 }
 
