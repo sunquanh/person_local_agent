@@ -194,7 +194,7 @@ function artIcon(ext) {
 
 /* ── 主题 ─────────────────────────────────────────────────── */
 function applyTheme() {
-  const dark = localStorage.getItem('theme') === 'dark';
+  const dark = localStorage.getItem(uiCacheKey(state.wsRoot, 'theme')) === 'dark';
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   const ld = $('#hlLight'), dd = $('#hlDark');
   if (ld) ld.disabled = dark;
@@ -216,20 +216,48 @@ function syncThemeBtn() {
     '<span>' + (dark ? '深色' : '浅色') + '</span>';
 }
 /* 主题入口：顶栏用量条那一行一键切；设置页 / 命令面板共用同一函数 */
-function persistUi(patch) {
-  // 主题、上次会话、模型覆盖和栏宽跟工作目录走，不只留在浏览器。
-  fetch('/api/ui', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch || {}),
-  }).catch(() => {});
+function cacheUiLocal(patch) {
+  const ws = state.wsRoot || '';
+  try {
+    if (patch.theme) localStorage.setItem(uiCacheKey(ws, 'theme'), patch.theme);
+    if (patch.last_session) localStorage.setItem(uiCacheKey(ws, 'lastSession'), patch.last_session);
+    if (patch.model_overrides) {
+      localStorage.setItem(uiCacheKey(ws, 'modelOverrides'), JSON.stringify(patch.model_overrides));
+    }
+    if (patch.panel_widths) {
+      const w = patch.panel_widths;
+      if (w.sb) localStorage.setItem(uiCacheKey(ws, 'sb-w'), String(w.sb));
+      if (w.rp) localStorage.setItem(uiCacheKey(ws, 'rp-w'), String(w.rp));
+    }
+  } catch (e) {}
+}
+async function persistUi(patch) {
+  // 浏览器里只留当前工作区的临时副本。写入成功与否以工作目录里的 ui.json 为准。
+  cacheUiLocal(patch || {});
+  let ok = false;
+  try {
+    const r = await fetch('/api/ui', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch || {}),
+    });
+    ok = !!r.ok;
+  } catch (e) {
+    ok = false;
+  }
+  const msg = uiSaveMessage(ok);
+  if (msg) toast(msg, true);
+  return ok;
 }
 function toggleTheme() {
   const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-  localStorage.setItem('theme', cur);
-  applyTheme();
+  applyThemeFrom(cur);
   syncThemeBtn();
   persistUi({ theme: cur });
   toast(cur === 'dark' ? '已切到深色' : '已切到浅色');
+}
+function applyThemeFrom(theme) {
+  try { localStorage.setItem(uiCacheKey(state.wsRoot, 'theme'), theme); } catch (e) {}
+  applyTheme();
 }
 

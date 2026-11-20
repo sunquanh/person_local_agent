@@ -3,13 +3,11 @@
 /* ── 启动 ─────────────────────────────────────────────────── */
 /* ── 会话级临时换模型（B9）：只覆盖模型名，同 base_url/key ── */
 let modelOvMap = {};
-try { modelOvMap = JSON.parse(localStorage.getItem('modelOverrides') || '{}'); } catch (e) { modelOvMap = {}; }
 function currentModelOv() { return (state.cur && modelOvMap[state.cur]) || ''; }
 function setModelOv(name) {
   if (!state.cur) return toast('请先选择会话', true);
   if (name) modelOvMap[state.cur] = String(name).trim();
   else delete modelOvMap[state.cur];
-  try { localStorage.setItem('modelOverrides', JSON.stringify(modelOvMap)); } catch (e) {}
   persistUi({ model_overrides: modelOvMap });
   renderModelSel();
 }
@@ -172,27 +170,45 @@ wbPageRegister();
 applyTheme();
 slashFillTemplates();
 function openRememberedSession() {
-  let last = null;
-  try { last = localStorage.getItem('lastSession'); } catch (e) {}
+  let last = '';
+  try { last = localStorage.getItem(uiCacheKey(state.wsRoot, 'lastSession')) || ''; } catch (e) {}
   if (last && state.sessions.some((s) => s.id === last)) {
     selectSession(last);
   } else if (!state.cur) {
     showWelcome(true);
   }
 }
-fetch('/api/ui').then((r) => r.json()).then((ui) => {
+function applyCachedUi() {
+  let theme = '';
+  try { theme = localStorage.getItem(uiCacheKey(state.wsRoot, 'theme')) || ''; } catch (e) {}
+  if (theme === 'dark' || theme === 'light') applyTheme();
+  try {
+    modelOvMap = JSON.parse(localStorage.getItem(uiCacheKey(state.wsRoot, 'modelOverrides')) || '{}');
+  } catch (e) { modelOvMap = {}; }
+  let sb = 0;
+  try { sb = +(localStorage.getItem(uiCacheKey(state.wsRoot, 'sb-w')) || 0); } catch (e) {}
+  if (sb) document.body.style.setProperty('--sb-w', sb + 'px');
+}
+fetch('/api/health').then((r) => r.json()).then((d) => {
+  if (d && d.workspace) state.wsRoot = d.workspace;
+  applyCachedUi();
+  return fetch('/api/ui').then((r) => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  });
+}).then((ui) => {
   if (!ui || typeof ui !== 'object') return;
-  if (ui.theme === 'dark' || ui.theme === 'light') {
-    localStorage.setItem('theme', ui.theme);
-    applyTheme();
-  }
+  if (ui.theme === 'dark' || ui.theme === 'light') applyThemeFrom(ui.theme);
   if (ui.model_overrides && typeof ui.model_overrides === 'object') {
     modelOvMap = ui.model_overrides;
+    cacheUiLocal({ model_overrides: modelOvMap });
   }
-  if (ui.last_session) localStorage.setItem('lastSession', ui.last_session);
+  if (ui.last_session) cacheUiLocal({ last_session: ui.last_session });
   const w = ui.panel_widths || {};
   if (w.sb) document.body.style.setProperty('--sb-w', Number(w.sb) + 'px');
-}).catch(() => {}).finally(() => {
+}).catch(() => {
+  toast(uiSaveMessage(false), true);
+}).finally(() => {
   loadSessions().then(openRememberedSession);
 });
 setBusyUI(false);

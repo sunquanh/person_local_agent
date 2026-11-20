@@ -6,16 +6,34 @@
 - 重试只重置失败项；已取消的项保持取消
 - 创建作业时排除作业自己的输出目录和 .agent
 """
+import logging
 import shutil
+import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 
-import sys
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+_UNHANDLED_THREADS = []
+
+
+def _thread_excepthook(args):
+    _UNHANDLED_THREADS.append(args)
+    sys.__stderr__.write(
+        '后台线程未处理异常: %s\n' % (args.exc_value,))
+
+
+threading.excepthook = _thread_excepthook
+
+
+def tearDownModule():
+    if _UNHANDLED_THREADS:
+        raise AssertionError('存在后台未处理异常: %s' % (
+            _UNHANDLED_THREADS[0].exc_value,))
 
 from agent.tools import ToolResult  # noqa: E402
 from agent.workspace import sanitize_slug  # noqa: E402
@@ -55,10 +73,25 @@ class TestBatchGateAndRetry(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.app = AgentServer(_config(self.tmp / 'ws'))
         self.app.llm = FakeLLM('已处理')
+        self._batch_errors = []
+
+        def _emit(record):
+            if record.exc_info:
+                self._batch_errors.append(record)
+
+        self._handler = logging.Handler()
+        self._handler.emit = _emit
+        logging.getLogger('agent.batch').addHandler(self._handler)
 
     def tearDown(self):
-        self.app.batch._stop = True
-        self.app.batch._wake.set()
+        # 先等批量线程离开记忆库，再删临时目录。
+        # 先删目录会让后台线程在 sqlite 上抛 OperationalError，那是清理竞争，不是存盘失败。
+        self.app.batch.close()
+        logging.getLogger('agent.batch').removeHandler(self._handler)
+        self.assertFalse(
+            self._batch_errors,
+            '批量线程记录了异常: %s' % (
+                self._batch_errors[0].exc_info[1] if self._batch_errors else ''))
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_server_has_model_gate(self):

@@ -59,6 +59,16 @@ class BatchRunner:
                                         name='batch-worker')
         self._thread.start()
 
+    def close(self):
+        """停掉后台线程并等它退出。调用方应在删除工作目录之前调用。"""
+        self._stop = True
+        self._wake.set()
+        thread = getattr(self, '_thread', None)
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=5)
+            if thread.is_alive():
+                raise RuntimeError('批量作业线程在停止后仍未退出')
+
     # ── 磁盘读写 ──────────────────────────────────────────────
     def running(self) -> bool:
         """是否有批量项正在执行（用于避免后台记忆提取与批量抢同一个推理槽）。"""

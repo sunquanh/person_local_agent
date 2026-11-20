@@ -156,7 +156,6 @@ $('#btnNew').onclick = async () => {
 async function selectSession(id, isNew) {
   state.cur = id;
   const gen = ++state.sessionGen;  // 快速连点两个会话时，旧请求的回包不许覆盖新会话
-  try { localStorage.setItem('lastSession', id); } catch (e) {}
   if (typeof persistUi === 'function') persistUi({ last_session: id });
   if (state.selectMode) exitSelectMode();
   showWelcome(false);

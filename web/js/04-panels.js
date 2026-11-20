@@ -245,12 +245,12 @@ function switchSession(dir) {
 /* ── 分栏拖拽把手 + 窄屏抽屉（U7）──────────────────────── */
 function initResizer(el, side) {
   if (!el) return;
-  const KEY = side === 'left' ? 'sb-w' : 'rp-w';
+  const widthKey = () => uiCacheKey(state.wsRoot, side === 'left' ? 'sb-w' : 'rp-w');
   const VAR = side === 'left' ? '--sb-w' : '--rp-w';
   const MIN = side === 'left' ? 200 : 250;
   const MAX = side === 'left' ? 420 : 460;
   let saved = 0;
-  try { saved = +(localStorage.getItem(KEY) || 0); } catch (e) {}
+  try { saved = +(localStorage.getItem(widthKey()) || 0); } catch (e) {}
   if (saved) document.body.style.setProperty(VAR, saved + 'px');
   const target = side === 'left' ? $('#sidebar') : $('#rightPanel');
   el.addEventListener('mousedown', (e) => {
@@ -271,7 +271,7 @@ function initResizer(el, side) {
       document.removeEventListener('mouseup', up);
       try {
         const width = Math.round(target.getBoundingClientRect().width);
-        localStorage.setItem(KEY, String(width));
+        localStorage.setItem(widthKey(), String(width));
         const widths = {
           sb: Math.round(parseFloat(document.body.style.getPropertyValue('--sb-w')) || 0),
           rp: Math.round(parseFloat(document.body.style.getPropertyValue('--rp-w')) || 0),
@@ -285,7 +285,7 @@ function initResizer(el, side) {
   });
   el.addEventListener('dblclick', () => {
     document.body.style.removeProperty(VAR);
-    try { localStorage.removeItem(KEY); } catch (e) {}
+    try { localStorage.removeItem(widthKey()); } catch (e) {}
     toast('宽度已复位');
   });
 }

@@ -320,7 +320,6 @@ async function send(overrideText, overrideAtts, opts) {
       });
       const d = await r.json();
       state.cur = d.session.id;
-      try { localStorage.setItem('lastSession', state.cur); } catch (e) {}
       if (typeof persistUi === 'function') persistUi({ last_session: state.cur });
       await loadSessions();
       renderSessions();
@@ -663,8 +662,7 @@ function handleFrame(f, botEl, thinkEl, ctx) {
       }
       if (f.session_id) {
         state.cur = f.session_id;
-        try { localStorage.setItem('lastSession', state.cur); } catch (e) {}
-      if (typeof persistUi === 'function') persistUi({ last_session: state.cur });
+        if (typeof persistUi === 'function') persistUi({ last_session: state.cur });
       }
       // 上下文预算 / 任务清单 / 来源
       if (f.context) setCtxMeter(f.context);
