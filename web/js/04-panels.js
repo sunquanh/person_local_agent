@@ -427,6 +427,11 @@ $('#rpTabs').addEventListener('click', (e) => {
   if (!b || b.getAttribute('aria-disabled') === 'true') return;
   rpTab = b.dataset.tab; syncRightPanel();
 });
+/* 右栏空态快捷入口：委托给侧栏已有的新建会话 / 设置按钮，不写新逻辑 */
+const rpEmptyNew = $('#rpEmptyNew');
+if (rpEmptyNew) rpEmptyNew.onclick = () => $('#btnNew').click();
+const rpEmptySettings = $('#rpEmptySettings');
+if (rpEmptySettings) rpEmptySettings.onclick = () => $('#btnSettings').click();
 
 /* ── 骨架屏 + 断连横幅（减少“点了没反应”感）─────────────── */
 function showSkeleton() {

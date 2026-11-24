@@ -359,6 +359,7 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .rp-empty p{margin:0 0 6px}
 .rp-empty b{color:var(--text);font-weight:600}
 .rp-empty .rp-empty-tip{font-size:var(--fs-xs);margin-top:10px}
+.rp-empty-acts{display:flex;gap:8px;justify-content:center;margin-top:14px}
 
 /* ── 右栏检查器 Tab：任务/工具/产物三选一，不再互相争高度 ── */
 #rpTabs{display:flex;gap:4px;flex:none}

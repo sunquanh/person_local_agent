@@ -55,7 +55,7 @@ function renderSessions() {
       empty.innerHTML = '没有匹配的会话<br><a class="sb-content-link">在全部会话内容中搜索 →</a>';
       empty.querySelector('.sb-content-link').onclick = () => openSearchModal(sbFilter);
     } else {
-      empty.textContent = '暂无会话，点上方「＋ 新会话」开始';
+      empty.innerHTML = '暂无会话<br>点上方「＋ 新会话」开始';
     }
     list.appendChild(empty);
     return;
