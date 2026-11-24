@@ -273,6 +273,13 @@ function renderWsFiles(d) {
     const full = (wsDir.path ? wsDir.path + '/' : '') + n.name;
     const row = document.createElement('div');
     row.className = 'ws-row ws-file';
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.setAttribute('aria-label', (inWs ? '预览文件 ' : '文件 ') + n.name);
+    row.addEventListener('keydown', (e) => {
+      if (e.target !== row) return;  // 复选框 /“分析”按钮自己处理按键，不触发预览
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); }
+    });
     row.innerHTML = (inWs
         ? `<input type="checkbox" class="tree-cb" data-rel="${esc(full)}"
              title="选入批量作业">`
@@ -280,7 +287,7 @@ function renderWsFiles(d) {
       `<span class="ic">${artIcon((n.name.split('.').pop() || '').toLowerCase())}</span>
       <span class="nm" title="${esc(full)}">${esc(n.name)}</span>
       <span class="sz">${fmtSize(n.size)}</span>
-      <span class="act" title="让 AI 分析此文件">${ico('search')} 分析</span>`;
+      <button type="button" class="act" title="让 AI 分析此文件">${ico('search')} 分析</button>`;
     if (inWs) {
       row.title = '点击预览文件';
       row.onclick = () => window.open('/api/file?path=' + encodeURIComponent(full), '_blank');
