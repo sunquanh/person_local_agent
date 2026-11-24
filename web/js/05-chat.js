@@ -298,6 +298,36 @@ function clientReqId(sid) {
   } catch (e) {}
   return id;
 }
+/* ââ è¯·æ±å¤±è´¥éè¯ï¼å¤±è´¥æ°æ³¡ä¸æâéæ°åéâæé® ââââââââ */
+async function retrySend(text, atts, botEl, runSid) {
+  if (state.busy || state.sendGate) return;
+  // åæ¥ä¼è¯åå²ï¼ç¨æ·æ¶æ¯å·²è½çï¼æå¡ç«¯å¨å¼è·åå°±ä¿å­ï¼æ¶èµ°âéæ°çæâ
+  // è·¯å¾ï¼ä¸éå¤è½çï¼æ²¡å°æå¡ç«¯æ¶å ææ¬è½®ä¸¤ä¸ªæ°æ³¡éæ°åã
+  let saved = false;
+  try {
+    const r = await fetch('/api/session?id=' + encodeURIComponent(runSid));
+    const d = await r.json();
+    const msgs = (d.session || {}).messages || [];
+    const last = msgs[msgs.length - 1];
+    saved = !!last && last.role === 'user' && last.content === text;
+  } catch (e) { /* æ¥ä¸å°å°±ææªè½çå¤ç */ }
+  if (saved) {
+    try {
+      await fetch('/api/session/regenerate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: runSid }),
+      });
+    } catch (e) { /* å°¾é¨æ²¡æå©æåå¤æ¶ä¹ä¸é»æ­ */ }
+    if (botEl && botEl.isConnected) botEl.remove();
+    await send(text, atts, { regenerate: true });
+  } else {
+    const userEl = botEl && botEl.previousElementSibling;
+    if (botEl && botEl.isConnected) botEl.remove();
+    if (userEl && userEl.classList && userEl.classList.contains('user')) userEl.remove();
+    await send(text, atts);
+  }
+}
+
 async function send(overrideText, overrideAtts, opts) {
   const inp = $('#input');
   const text = (overrideText != null ? String(overrideText) : inp.value).trim();
@@ -529,9 +559,19 @@ async function send(overrideText, overrideAtts, opts) {
         en.className = 'err-box';
         en.innerHTML = `<div class="err-line">${ico('warn')} ${esc(e.message)}</div>`;
         contentDiv.appendChild(en);
+        const rb = document.createElement('button');
+        rb.className = 'btn retry-btn';
+        rb.textContent = '↻ 重新发送';
+        rb.onclick = () => retrySend(text, atts, botEl, runSid);
+        contentDiv.appendChild(rb);
       } else {
         contentDiv.innerHTML = '';
         contentDiv.innerHTML = `<div class="err-line">${ico('warn')} ${esc(e.message)}</div>`;
+        const rb = document.createElement('button');
+        rb.className = 'btn retry-btn';
+        rb.textContent = '↻ 重新发送';
+        rb.onclick = () => retrySend(text, atts, botEl, runSid);
+        contentDiv.appendChild(rb);
       }
     }
   } finally {

@@ -16,6 +16,10 @@ from contextlib import contextmanager
 import time
 from datetime import datetime
 
+from agent.logsetup import get
+
+log = get('memory')
+
 _STOPWORDS = set("的了是我你他她它们这那有在要和与跟就都对给把被让请帮我我们您一个等".strip())
 
 _LOCK = threading.Lock()
@@ -414,8 +418,9 @@ class Memory:
                     if ':' in p:
                         k, v = p.split(':', 1)
                         self.save_pref(k.strip()[:60], v.strip()[:300])
-            except Exception:
-                pass  # 记忆提取失败不影响主流程
+            except Exception as e:
+                # 记忆提取失败不影响主流程，但要留日志（原先静默吞错）
+                log.warning('记忆提取失败（会话 %s）: %s', session_id, e)
             finally:
                 self._extracting.clear()
 

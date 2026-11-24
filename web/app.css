@@ -727,6 +727,7 @@ body.resizing *{transition:none!important}
   font-size:11px;line-height:1.55;white-space:pre-wrap;word-break:break-all}
 .err-hint{margin-top:6px;font-size:11.5px}
 .err-box .btn{margin-top:9px}
+.retry-btn{margin-top:9px}
 /* 长任务提醒（B8「再等 5 分钟」）：不打断阅读，只在本轮气泡里加一条提示 */
 .warn-box{border:1px solid color-mix(in srgb,var(--warn,#d99) 38%,var(--border));
   border-radius:11px;background:color-mix(in srgb,var(--warn,#d99) 6%,var(--panel));

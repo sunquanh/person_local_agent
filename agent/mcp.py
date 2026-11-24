@@ -198,16 +198,17 @@ class McpServer:
             try:
                 if proc.stdin:
                     proc.stdin.close()
-            except OSError:
-                pass
+            except OSError as e:
+                log.debug('关闭 MCP 进程 stdin 失败: %s', e)
             try:
                 proc.terminate()
                 proc.wait(timeout=3)
-            except Exception:
+            except Exception as e:
+                log.debug('终止 MCP 进程失败，尝试 kill: %s', e)
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as e2:
+                    log.debug('强制结束 MCP 进程失败: %s', e2)
         self._gen += 1                 # 先作废旧 reader，再清残留响应
         while True:
             try:
@@ -230,8 +231,8 @@ class McpServer:
             for line in iter(proc.stdout.readline, ''):
                 if line.strip():
                     put(line)
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as e:
+            log.debug('读取 MCP stdout 失败: %s', e)
         # EOF：进程退出，唤醒所有等待者
         put(None)
         if self.proc is proc and gen == self._gen:
@@ -246,8 +247,8 @@ class McpServer:
         try:
             for line in iter(proc.stderr.readline, ''):
                 self._stderr_tail.append(line.rstrip())
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as e:
+            log.debug('读取 MCP stderr 失败: %s', e)
 
     # ── JSON-RPC ─────────────────────────────────────────────
     def _notify(self, method: str, params: dict = None):

@@ -352,12 +352,18 @@ function renderHistory(messages) {
   box.scrollTop = box.scrollHeight;
   // 会话级工具面板：全部消息的工具调用聚合到单一折叠块
   renderSessionTools(messages);
-  // 刷新/切换会话后，右侧任务清单与上下文条也要恢复（不能只在实时帧时出现）
-  const lastWithTodo = [...messages].reverse().find(
-    (m) => m.role === 'assistant' && Array.isArray(m.todos) && m.todos.length);
+  // 刷新/切换会话后，右侧任务清单与上下文条也要恢复（不能只在实时帧时出现）。
+  // 原先两次反向遍历各扫全量消息：一次倒序同时取“最后带 todos 的”和“最后带 context 的”，省一次全量拷贝+遍历。
+  let lastWithTodo = null;
+  let lastWithCtx = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'assistant') continue;
+    if (!lastWithTodo && Array.isArray(m.todos) && m.todos.length) lastWithTodo = m;
+    if (!lastWithCtx && m.context && m.context.used) lastWithCtx = m;
+    if (lastWithTodo && lastWithCtx) break;
+  }
   renderTodoPanel(lastWithTodo ? lastWithTodo.todos : []);
-  const lastWithCtx = [...messages].reverse().find(
-    (m) => m.role === 'assistant' && m.context && m.context.used);
   if (lastWithCtx) setCtxMeter(lastWithCtx.context);
   syncRightPanel();
 }

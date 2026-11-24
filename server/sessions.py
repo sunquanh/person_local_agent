@@ -562,6 +562,23 @@ class SessionManager:
     def session_ctx(self, s: Session) -> SessionCtx:
         return SessionCtx(s.id, s.title, datetime.now().strftime('%Y-%m-%d'))
 
+    # 工作日志上限：两份日志都只留最近约 100KB（超 200KB 时截断旧头），
+    # 防止长期使用后单个 md 无限膨胀。
+    _WORK_LOG_MAX = 200_000
+    _WORK_LOG_KEEP = 100_000
+
+    @staticmethod
+    def _rotate_work_log(p: Path):
+        """超上限时截掉文件头（从第一个完整换行处开始保留），不丢最新内容。"""
+        try:
+            if p.exists() and p.stat().st_size > SessionManager._WORK_LOG_MAX:
+                data = p.read_bytes()[-SessionManager._WORK_LOG_KEEP:]
+                cut = data.find(b'\n')
+                tail = data[cut + 1:] if cut >= 0 else data
+                p.write_bytes('# 工作日志（已截断，只保留最近内容）\n'.encode('utf-8') + tail)
+        except Exception:
+            pass
+
     def write_work_log(self, sid: str, user_input: str, tool_steps: list, response: str,
                        title: str = None):
         """追加本轮工作日志（会话目录 + notes/工作日志/<日期>.md）。"""
@@ -584,6 +601,7 @@ class SessionManager:
                 if not p.exists():
                     p.write_text(f"# 工作日志 {now.strftime('%Y-%m-%d')}\n",
                                  encoding='utf-8')
+                self._rotate_work_log(p)
                 with open(p, 'a', encoding='utf-8') as f:
                     f.writelines([f"\n## {ts}\n\n"] + body)
                 try:
@@ -600,6 +618,7 @@ class SessionManager:
                         except Exception:
                             title = sid
                     daily = [f"\n### {ts} · {title}\n\n"] + body + ["\n---\n"]
+                    self._rotate_work_log(pd)
                     with open(pd, 'a', encoding='utf-8') as f:
                         f.writelines(daily)
                 except Exception:

@@ -296,15 +296,21 @@ async function mcpFormSave() {
     renderMcpList(list);
     // 刚保存的服务还在握手：等一会儿再回读最终状态，避免显示“未启动/0 个工具”
     const mine0 = list.find((x) => x.name === srv.name) || {};
-    // 启用的服务刚保存时可能还在「连接中/未启动」的瞬时状态：等一等再回读最终结果
+    // 启用的服务刚保存时可能还在「连接中/未启动」的瞬时状态：轮询回读最终结果
+    // （原先固定等 1.5 秒：握手慢就误报未连接、握手快又白等）。最多等约 6 秒，
+    // 连上或明确报错即停，不再多等。
     if (mine0.enabled && mine0.status !== 'connected') {
-      await new Promise((r) => setTimeout(r, 1500));
-      try {
-        const rr = await fetch('/api/settings');
-        const s2 = await rr.json();
-        list = s2.mcp || list;
-        renderMcpList(list);
-      } catch (e) { /* 保留当前列表 */ }
+      for (let n = 0; n < 12; n++) {
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          const rr = await fetch('/api/settings');
+          const s2 = await rr.json();
+          list = s2.mcp || list;
+          renderMcpList(list);
+        } catch (e) { /* 保留当前列表，下一轮再试 */ }
+        const cur = list.find((x) => x.name === srv.name) || {};
+        if (cur.status === 'connected' || cur.error) break;
+      }
     }
     const st = list.find((x) => x.name === srv.name) || {};
     const ok = st.status === 'connected';
@@ -320,6 +326,10 @@ async function mcpFormSave() {
 
 /* ── 批量作业（B8）：一个目录一次跑完，带台账 ──────────────── */
 const batchState = { timer: null, dir: 'inputs', expanded: new Set() };
+
+function ensureBatchPoll() {
+  if (!batchState.timer) batchState.timer = setInterval(renderBatchList, 2000);
+}
 
 function closeBatchPoll() {
   if (batchState.timer) { clearInterval(batchState.timer); batchState.timer = null; }
@@ -577,6 +587,11 @@ async function renderBatchList() {
       };
     });
   });
+  // 没有在跑/排队的作业就停掉 2 秒轮询（面板开着也不再刷）；
+  // 新作业创建或状态变化时 renderBatchList 会重新把它拉起来。
+  const anyActive = jobs.some((j) => j.status === 'running' || j.status === 'queued');
+  if (anyActive) ensureBatchPoll();
+  else closeBatchPoll();
 }
 
 /* ── 命令面板（Ctrl/Cmd+K）──────────────────────────────── */

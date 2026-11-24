@@ -1116,6 +1116,11 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError('body too large')
         return self.rfile.read(length)
 
+    def _read_json_body(self, limit=5 * 1024 * 1024):
+        """读请求体并解析为 dict：空体返回 {}，非法 JSON 照旧抛错。"""
+        raw = self._read_body(limit=limit)
+        return json.loads(raw or b'{}')
+
     def _is_loopback(self) -> bool:
         """请求是否来自本机（127.0.0.1）。
 
@@ -1280,6 +1285,86 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+
+    _POST_ROUTES = {
+        '/api/chat': '_post_api_chat',
+        '/api/session/new': '_post_api_session_new',
+        '/api/session/rename': '_post_api_session_rename',
+        '/api/session/delete': '_post_api_session_delete',
+        '/api/session/pin': '_post_api_session_pin',
+        '/api/session/regenerate': '_post_api_session_regenerate',
+        '/api/session/fork': '_post_api_session_fork',
+        '/api/session/truncate': '_post_api_session_truncate',
+        '/api/note': '_post_api_note',
+        '/api/upload': '_post_api_upload',
+        '/api/attachment/delete': '_post_api_attachment_delete',
+        '/api/page/open': '_post_api_page_open',
+        '/api/page/close': '_post_api_page_close',
+        '/api/page/alive': '_post_api_page_alive',
+        '/api/stop': '_post_api_stop',
+        '/api/extend': '_post_api_extend',
+        '/api/confirm': '_post_api_confirm',
+        '/api/answer': '_post_api_answer',
+        '/api/artifact/restore': '_post_api_artifact_restore',
+        '/api/batch': '_post_api_batch',
+        '/api/batch/control': '_post_api_batch_control',
+        '/api/undo': '_post_api_undo',
+        '/api/workspace/delete': '_post_api_workspace_delete',
+        '/api/ui': '_post_api_ui',
+        '/api/settings': '_post_api_settings',
+        '/api/mcp/reload': '_post_api_mcp_reload',
+        '/api/mcp/resource': '_post_api_mcp_resource',
+        '/api/mcp/save': '_post_api_mcp_save',
+        '/api/mcp/delete': '_post_api_mcp_delete',
+        '/api/compact': '_post_api_compact',
+        '/api/mcp/prompt': '_post_api_mcp_prompt',
+        '/api/project': '_post_api_project',
+        '/api/templates': '_post_api_templates',
+        '/api/test_llm': '_post_api_test_llm',
+        '/api/rag/index': '_post_api_rag_index',
+        '/api/memory/delete': '_post_api_memory_delete',
+        '/api/memory/update': '_post_api_memory_update',
+        '/api/memory/important': '_post_api_memory_important',
+        '/api/memory/tags': '_post_api_memory_tags',
+        '/api/memory/add': '_post_api_memory_add',
+        '/api/memory/pref': '_post_api_memory_pref',
+    }
+
+    _GET_ROUTES = {
+        '/api/sessions': '_get_api_sessions',
+        '/api/session': '_get_api_session',
+        '/api/file': '_get_api_file',
+        '/api/preview': '_get_api_preview',
+        '/api/artifact/versions': '_get_api_artifact_versions',
+        '/api/artifact/version': '_get_api_artifact_version',
+        '/api/artifact/diff': '_get_api_artifact_diff',
+        '/api/open-folder': '_get_api_open_folder',
+        '/api/open-file': '_get_api_open_folder',
+        '/api/workspace/tree': '_get_api_workspace_tree',
+        '/api/memory': '_get_api_memory',
+        '/api/health': '_get_api_health',
+        '/api/config': '_get_api_config',
+        '/api/settings': '_get_api_settings',
+        '/api/ui': '_get_api_ui',
+        '/api/rag/index': '_get_api_rag_index',
+        '/api/rag/search': '_get_api_rag_search',
+        '/api/tree': '_get_api_tree',
+        '/api/search': '_get_api_search',
+        '/api/run': '_get_api_run',
+        '/api/jobs': '_get_api_jobs',
+        '/api/batch': '_get_api_batch',
+        '/api/batch/csv': '_get_api_batch_csv',
+        '/api/logs': '_get_api_logs',
+        '/api/rag/stats': '_get_api_rag_stats',
+        '/api/undo/list': '_get_api_undo_list',
+        '/api/turn/diff': '_get_api_turn_diff',
+        '/api/project': '_get_api_project',
+        '/api/templates': '_get_api_templates',
+        '/api/export_session': '_get_api_export_session',
+        '/api/export_artifacts': '_get_api_export_artifacts',
+        '/api/backup': '_get_api_backup',
+    }
+
     # ── GET ──────────────────────────────────────────────────────
     def do_GET(self):
         u = urlparse(self.path)
@@ -1306,208 +1391,9 @@ class Handler(BaseHTTPRequestHandler):
                 # 拆分后的前端脚本（web/js/*.js，顺序加载，见 index.html）：
                 # 与 /vendor/ 同口径走 _static，越界校验与 no-cache 都在里面。
                 return self._static(path.lstrip('/'))
-            if path == '/api/sessions':
-                return self._json({"sessions": self.app.sessions.list_all()})
-            if path == '/api/session':
-                sid = (qs.get('id') or [''])[0]
-                try:
-                    s = self.app.sessions.load(sid)
-                except (ValueError, FileNotFoundError):
-                    return self._err(404, '会话不存在')
-                return self._json({"session": {
-                    "id": s.id, "title": s.title, "created_at": s.created_at,
-                    "messages": s.messages,
-                    "compact": s.compact,
-                    "artifacts": self.app._artifact_metas(s.artifacts)}})
-            if path == '/api/file':
-                rel = (qs.get('path') or [''])[0]
-                return self._serve_file(rel)
-            if path == '/api/preview':
-                # 站内预览：产物点开不再直接下载/新开页（U6）
-                rel = (qs.get('path') or [''])[0]
-                return self._preview(rel)
-            if path == '/api/artifact/versions':
-                rel = (qs.get('path') or [''])[0]
-                return self._json({"versions": self.app.ws.list_versions(rel)})
-            if path == '/api/artifact/version':
-                # 历史版本原始文件（预览/下载）
-                rel = (qs.get('path') or [''])[0]
-                ts = (qs.get('ts') or [''])[0]
-                try:
-                    p = self.app.ws.version_path(rel, ts)
-                except PermissionError as e:
-                    return self._err(400, str(e))
-                except FileNotFoundError as e:
-                    return self._err(404, str(e))
-                return self._send_file(p)
-            if path == '/api/artifact/diff':
-                # 历史版本与当前的逐行 diff（产物版本对比视图）
-                rel = (qs.get('path') or [''])[0]
-                ts = (qs.get('ts') or [''])[0]
-                if not rel or not ts:
-                    return self._err(400, '缺少 path / ts')
-                try:
-                    return self._json(self.app.ws.version_diff(rel, ts))
-                except PermissionError as e:
-                    return self._err(400, str(e))
-                except FileNotFoundError as e:
-                    return self._err(404, str(e))
-            if path in ('/api/open-folder', '/api/open-file'):
-                rel = (qs.get('path') or [''])[0]
-                return self._open_folder(rel)
-            if path == '/api/workspace/tree':
-                return self._json({"root": str(self.app.ws.root),
-                                   "tree": self._workspace_tree()})
-            if path == '/api/memory':
-                return self._json({"facts": self.app.memory.all_facts(),
-                                   "prefs": self.app.memory.get_prefs()})
-            if path == '/api/health':
-                authed = self._auth_ok()
-                base = {
-                    "ok": True,
-                    "busy": self.app.busy,
-                    "auth_required": self.app.auth_required,
-                    "authed": bool(authed),
-                    "is_loopback": self._is_loopback(),
-                    "uptime_s": round(time.time() - self.app._start_ts, 1),
-                    "auto_exit": self.app.auto_exit,
-                    "auto_exit_grace_s": self.app.auto_exit_grace_s,
-                    "pages": len(self.app._pages),
-                }
-                # 免认证探活：只给"活着/忙不忙"，不泄露工作目录与模型地址
-                if self.app.auth_required and not authed:
-                    return self._json(base)
-                from agent.tools import detect_optional_deps
-                # health 只探活：不调 rag.stats()（它会全树遍历 inputs/notes
-                # 算 pending，而 stats() 从不返回 'ok' 键，这行旧代码恒为
-                # True，纯浪费。RAG 统计只在设置页 /api/rag/stats 按需算）
-                rag_ok = True
-                m = self.app.config.get('model', {}) or {}
-                # 免认证接口：绝不能把 api_key（哪怕是 ENC 密文）带出去
-                safe_model = {k: v for k, v in m.items() if k != 'api_key'}
-                base.update({
-                    "model": safe_model,
-                    "context_window": int(m.get('context_window', 0) or 0),
-                    "workspace": str(self.app.ws.root),
-                    "deps": detect_optional_deps(),
-                    "rag_ok": rag_ok,
-                })
-                return self._json(base)
-            if path == '/api/config':
-                return self._json(self.app._redacted_config())
-            if path == '/api/settings':
-                return self._json(self._settings())
-            if path == '/api/ui':
-                from server.storepath import load_ui
-                return self._json(load_ui(str(self.app.ws.root)))
-            if path == '/api/rag/index':
-                # GET 但有副作用（重建索引）：走写请求的 CSRF 门禁，
-                # 否则任意网页一次顶级导航就能凭 cookie 触发。
-                if not self._mutation_allowed():
-                    return self._err(403, '跨站请求已拒绝')
-                return self._json(self.app.rag.refresh())
-            if path == '/api/rag/search':
-                q = (qs.get('q') or [''])[0]
-                return self._json({"results": self.app.rag.search(q, 5)})
-            if path == '/api/tree':
-                return self._json(self._dir_listing(qs))
-            if path == '/api/search':
-                q = (qs.get('q') or [''])[0]
-                return self._json({"results": self.app.sessions.search(q)})
-            if path == '/api/run':
-                rid = (qs.get('id') or [''])[0]
-                sid = (qs.get('sid') or [''])[0]
-                req = (qs.get('req') or [''])[0]
-                run = None
-                if rid:
-                    run = self.app.runs.by_id(rid)
-                elif req:
-                    run = self.app.runs.for_request(req)
-                elif sid:
-                    run = self.app.runs.for_session(sid)
-                return self._json({'run': None if run is None else run.snapshot(0)})
-            if path == '/api/jobs':
-                cid = self._client_id()
-                title = ''
-                if self.app._running_sid:
-                    try:
-                        title = self.app.sessions.load(self.app._running_sid).title
-                    except Exception:
-                        title = ''
-                return self._json({"jobs": self.app._jobs, "queue": len(self.app._queue),
-                                   "running": bool(self.app._running),
-                                   "running_sid": self.app._running_sid or '',
-                                   "running_title": title,
-                                   "running_owner_is_me": bool(
-                                       self.app._running_owner and cid
-                                       and self.app._running_owner == cid),
-                                   "started_at": self.app._run_started})
-            if path == '/api/batch':
-                # 批量作业（B8）：带 id 返回单个台账（含逐项状态），否则返回列表
-                jid = (qs.get('id') or [''])[0]
-                if jid:
-                    try:
-                        return self._json({"job": self.app.batch.get(jid)})
-                    except PermissionError as e:
-                        return self._err(400, str(e))
-                    except FileNotFoundError as e:
-                        return self._err(404, str(e))
-                return self._json({"jobs": self.app.batch.list(),
-                                   "running": self.app.batch._cur is not None})
-            if path == '/api/batch/csv':
-                jid = (qs.get('id') or [''])[0]
-                try:
-                    txt = self.app.batch.to_csv(jid)
-                except PermissionError as e:
-                    return self._err(400, str(e))
-                except FileNotFoundError as e:
-                    return self._err(404, str(e))
-                data = ('\ufeff' + txt).encode('utf-8')
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/csv; charset=utf-8')
-                self.send_header(
-                    'Content-Disposition',
-                    f'attachment; filename="batch-{jid}.csv"')
-                self.send_header('Content-Length', str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return None
-            if path == '/api/logs':
-                n = 300
-                try:
-                    n = max(20, min(2000, int((qs.get('n') or ['300'])[0])))
-                except ValueError:
-                    pass
-                return self._json({"path": str(logsetup.path(self.app.ws.root)),
-                                   "lines": logsetup.tail(self.app.ws.root, n)})
-            if path == '/api/rag/stats':
-                return self._json(self.app.rag.stats())
-            if path == '/api/undo/list':
-                sid = (qs.get('id') or [''])[0]
-                if not sid:
-                    return self._err(400, '缺少 id')
-                return self._json({"turns": self.app.ws.list_turns(sid)})
-            if path == '/api/turn/diff':
-                sid = (qs.get('id') or [''])[0]
-                turn = (qs.get('turn') or [''])[0]
-                if not sid or not turn:
-                    return self._err(400, '缺少 id / turn')
-                try:
-                    return self._json(self.app.ws.turn_diff(sid, turn))
-                except FileNotFoundError as e:
-                    return self._err(404, str(e))
-            if path == '/api/project':
-                return self._json({"files": self._project_files()})
-            if path == '/api/templates':
-                return self._json({"templates": self.app.load_templates()})
-            if path == '/api/export_session':
-                sid = (qs.get('id') or [''])[0]
-                return self._export_session(sid)
-            if path == '/api/export_artifacts':
-                sid = (qs.get('id') or [''])[0]
-                return self._export_artifacts_zip(sid)
-            if path == '/api/backup':
-                return self._backup_zip()
+            handler = self._GET_ROUTES.get(path)
+            if handler is not None:
+                return getattr(self, handler)(qs, path)
             if path.startswith('/vendor/'):
                 return self._static(path.lstrip('/'))
             if path == '/favicon.ico':
@@ -1515,6 +1401,241 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(404, 'not found')
         except Exception as e:
             self._err(500, f'{type(e).__name__}: {e}')
+
+    # ── GET 路由方法（各 /api/* 分支）───────────────────────
+    def _get_api_sessions(self, qs, path):
+        return self._json({"sessions": self.app.sessions.list_all()})
+
+    def _get_api_session(self, qs, path):
+        sid = (qs.get('id') or [''])[0]
+        try:
+            s = self.app.sessions.load(sid)
+        except (ValueError, FileNotFoundError):
+            return self._err(404, '会话不存在')
+        return self._json({"session": {
+            "id": s.id, "title": s.title, "created_at": s.created_at,
+            "messages": s.messages,
+            "compact": s.compact,
+            "artifacts": self.app._artifact_metas(s.artifacts)}})
+
+    def _get_api_file(self, qs, path):
+        rel = (qs.get('path') or [''])[0]
+        return self._serve_file(rel)
+
+    def _get_api_preview(self, qs, path):
+        # 站内预览：产物点开不再直接下载/新开页（U6）
+        rel = (qs.get('path') or [''])[0]
+        return self._preview(rel)
+
+    def _get_api_artifact_versions(self, qs, path):
+        rel = (qs.get('path') or [''])[0]
+        return self._json({"versions": self.app.ws.list_versions(rel)})
+
+    def _get_api_artifact_version(self, qs, path):
+        # 历史版本原始文件（预览/下载）
+        rel = (qs.get('path') or [''])[0]
+        ts = (qs.get('ts') or [''])[0]
+        try:
+            p = self.app.ws.version_path(rel, ts)
+        except PermissionError as e:
+            return self._err(400, str(e))
+        except FileNotFoundError as e:
+            return self._err(404, str(e))
+        return self._send_file(p)
+
+    def _get_api_artifact_diff(self, qs, path):
+        # 历史版本与当前的逐行 diff（产物版本对比视图）
+        rel = (qs.get('path') or [''])[0]
+        ts = (qs.get('ts') or [''])[0]
+        if not rel or not ts:
+            return self._err(400, '缺少 path / ts')
+        try:
+            return self._json(self.app.ws.version_diff(rel, ts))
+        except PermissionError as e:
+            return self._err(400, str(e))
+        except FileNotFoundError as e:
+            return self._err(404, str(e))
+
+    def _get_api_open_folder(self, qs, path):
+        rel = (qs.get('path') or [''])[0]
+        return self._open_folder(rel)
+
+    def _get_api_workspace_tree(self, qs, path):
+        return self._json({"root": str(self.app.ws.root),
+                           "tree": self._workspace_tree()})
+
+    def _get_api_memory(self, qs, path):
+        return self._json({"facts": self.app.memory.all_facts(),
+                           "prefs": self.app.memory.get_prefs()})
+
+    def _get_api_health(self, qs, path):
+        authed = self._auth_ok()
+        base = {
+            "ok": True,
+            "busy": self.app.busy,
+            "auth_required": self.app.auth_required,
+            "authed": bool(authed),
+            "is_loopback": self._is_loopback(),
+            "uptime_s": round(time.time() - self.app._start_ts, 1),
+            "auto_exit": self.app.auto_exit,
+            "auto_exit_grace_s": self.app.auto_exit_grace_s,
+            "pages": len(self.app._pages),
+        }
+        # 免认证探活：只给"活着/忙不忙"，不泄露工作目录与模型地址
+        if self.app.auth_required and not authed:
+            return self._json(base)
+        from agent.tools import detect_optional_deps
+        # health 只探活：不调 rag.stats()（它会全树遍历 inputs/notes
+        # 算 pending，而 stats() 从不返回 'ok' 键，这行旧代码恒为
+        # True，纯浪费。RAG 统计只在设置页 /api/rag/stats 按需算）
+        rag_ok = True
+        m = self.app.config.get('model', {}) or {}
+        # 免认证接口：绝不能把 api_key（哪怕是 ENC 密文）带出去
+        safe_model = {k: v for k, v in m.items() if k != 'api_key'}
+        base.update({
+            "model": safe_model,
+            "context_window": int(m.get('context_window', 0) or 0),
+            "workspace": str(self.app.ws.root),
+            "deps": detect_optional_deps(),
+            "rag_ok": rag_ok,
+        })
+        return self._json(base)
+
+    def _get_api_config(self, qs, path):
+        return self._json(self.app._redacted_config())
+
+    def _get_api_settings(self, qs, path):
+        return self._json(self._settings())
+
+    def _get_api_ui(self, qs, path):
+        from server.storepath import load_ui
+        return self._json(load_ui(str(self.app.ws.root)))
+
+    def _get_api_rag_index(self, qs, path):
+        # GET 但有副作用（重建索引）：走写请求的 CSRF 门禁，
+        # 否则任意网页一次顶级导航就能凭 cookie 触发。
+        if not self._mutation_allowed():
+            return self._err(403, '跨站请求已拒绝')
+        return self._json(self.app.rag.refresh())
+
+    def _get_api_rag_search(self, qs, path):
+        q = (qs.get('q') or [''])[0]
+        return self._json({"results": self.app.rag.search(q, 5)})
+
+    def _get_api_tree(self, qs, path):
+        return self._json(self._dir_listing(qs))
+
+    def _get_api_search(self, qs, path):
+        q = (qs.get('q') or [''])[0]
+        return self._json({"results": self.app.sessions.search(q)})
+
+    def _get_api_run(self, qs, path):
+        rid = (qs.get('id') or [''])[0]
+        sid = (qs.get('sid') or [''])[0]
+        req = (qs.get('req') or [''])[0]
+        run = None
+        if rid:
+            run = self.app.runs.by_id(rid)
+        elif req:
+            run = self.app.runs.for_request(req)
+        elif sid:
+            run = self.app.runs.for_session(sid)
+        return self._json({'run': None if run is None else run.snapshot(0)})
+
+    def _get_api_jobs(self, qs, path):
+        cid = self._client_id()
+        title = ''
+        if self.app._running_sid:
+            try:
+                title = self.app.sessions.load(self.app._running_sid).title
+            except Exception:
+                title = ''
+        return self._json({"jobs": self.app._jobs, "queue": len(self.app._queue),
+                           "running": bool(self.app._running),
+                           "running_sid": self.app._running_sid or '',
+                           "running_title": title,
+                           "running_owner_is_me": bool(
+                               self.app._running_owner and cid
+                               and self.app._running_owner == cid),
+                           "started_at": self.app._run_started})
+
+    def _get_api_batch(self, qs, path):
+        # 批量作业（B8）：带 id 返回单个台账（含逐项状态），否则返回列表
+        jid = (qs.get('id') or [''])[0]
+        if jid:
+            try:
+                return self._json({"job": self.app.batch.get(jid)})
+            except PermissionError as e:
+                return self._err(400, str(e))
+            except FileNotFoundError as e:
+                return self._err(404, str(e))
+        return self._json({"jobs": self.app.batch.list(),
+                           "running": self.app.batch._cur is not None})
+
+    def _get_api_batch_csv(self, qs, path):
+        jid = (qs.get('id') or [''])[0]
+        try:
+            txt = self.app.batch.to_csv(jid)
+        except PermissionError as e:
+            return self._err(400, str(e))
+        except FileNotFoundError as e:
+            return self._err(404, str(e))
+        data = ('\ufeff' + txt).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/csv; charset=utf-8')
+        self.send_header(
+            'Content-Disposition',
+            f'attachment; filename="batch-{jid}.csv"')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        return None
+
+    def _get_api_logs(self, qs, path):
+        n = 300
+        try:
+            n = max(20, min(2000, int((qs.get('n') or ['300'])[0])))
+        except ValueError:
+            pass
+        return self._json({"path": str(logsetup.path(self.app.ws.root)),
+                           "lines": logsetup.tail(self.app.ws.root, n)})
+
+    def _get_api_rag_stats(self, qs, path):
+        return self._json(self.app.rag.stats())
+
+    def _get_api_undo_list(self, qs, path):
+        sid = (qs.get('id') or [''])[0]
+        if not sid:
+            return self._err(400, '缺少 id')
+        return self._json({"turns": self.app.ws.list_turns(sid)})
+
+    def _get_api_turn_diff(self, qs, path):
+        sid = (qs.get('id') or [''])[0]
+        turn = (qs.get('turn') or [''])[0]
+        if not sid or not turn:
+            return self._err(400, '缺少 id / turn')
+        try:
+            return self._json(self.app.ws.turn_diff(sid, turn))
+        except FileNotFoundError as e:
+            return self._err(404, str(e))
+
+    def _get_api_project(self, qs, path):
+        return self._json({"files": self._project_files()})
+
+    def _get_api_templates(self, qs, path):
+        return self._json({"templates": self.app.load_templates()})
+
+    def _get_api_export_session(self, qs, path):
+        sid = (qs.get('id') or [''])[0]
+        return self._export_session(sid)
+
+    def _get_api_export_artifacts(self, qs, path):
+        sid = (qs.get('id') or [''])[0]
+        return self._export_artifacts_zip(sid)
+
+    def _get_api_backup(self, qs, path):
+        return self._backup_zip()
+
 
     def _static(self, name):
         # 名字来自 URL（/vendor/../../config.json）：先 resolve 再校验落在
@@ -1761,6 +1882,7 @@ class Handler(BaseHTTPRequestHandler):
         return s[:cap], True
 
     # ── POST ─────────────────────────────────────────────────────
+    # ── POST（路由分发：各分支见下方 _post_* 方法）──────────────
     def do_POST(self):
         u = urlparse(self.path)
         path = u.path
@@ -1770,332 +1892,377 @@ class Handler(BaseHTTPRequestHandler):
         if not self._mutation_allowed():
             return self._err(403, '跨站请求已拒绝')
         try:
-            if path == '/api/chat':
-                return self._handle_chat()
-            if path == '/api/session/new':
-                d = json.loads(self._read_body() or b'{}')
-                s = self.app.sessions.create(d.get('title') or '新会话')
-                return self._json({"session": s.to_meta()})
-            if path == '/api/session/rename':
-                d = json.loads(self._read_body() or b'{}')
-                self.app.sessions.rename(d['id'], d.get('title') or '新会话')
-                return self._json({"ok": True})
-            if path == '/api/session/delete':
-                d = json.loads(self._read_body() or b'{}')
-                self.app.sessions.delete(d['id'])
-                return self._json({"ok": True})
-            if path == '/api/session/pin':
-                d = json.loads(self._read_body() or b'{}')
-                self.app.sessions.set_pinned(d['id'], bool(d.get('pinned')))
-                return self._json({"ok": True})
-            if path == '/api/session/regenerate':
-                d = json.loads(self._read_body() or b'{}')
-                try:
-                    self.app.sessions.pop_trailing_assistant(d['id'])
-                except (ValueError, FileNotFoundError):
-                    return self._err(404, '会话不存在')
-                return self._json({"ok": True})
-            if path == '/api/session/fork':
-                # 从某条消息分叉出新会话（「从这里分支」）
-                d = json.loads(self._read_body() or b'{}')
-                sid = str(d.get('id') or '')
-                if not sid:
-                    return self._err(400, '缺少 id')
-                try:
-                    s = self.app.sessions.fork(sid, int(d.get('index') or 0))
-                except ValueError as e:
-                    return self._err(400, str(e))
-                log.info('会话分叉: %s -> %s (index=%s)', sid, s.id, d.get('index'))
-                return self._json({"ok": True, "session": s.to_meta()})
-            if path == '/api/session/truncate':
-                # 删除某条及其之后的对话（编辑重发 / 删除该轮）
-                d = json.loads(self._read_body() or b'{}')
-                sid = str(d.get('id') or '')
-                if not sid:
-                    return self._err(400, '缺少 id')
-                removed = self.app.sessions.truncate(sid, int(d.get('index') or 0))
-                log.info('会话截断: %s 从 index=%s 起删除 %s 条', sid, d.get('index'), removed)
-                return self._json({"ok": True, "removed": removed})
-            if path == '/api/note':
-                d = json.loads(self._read_body(limit=2 * 1024 * 1024) or b'{}')
-                return self._save_note(d)
-            if path == '/api/upload':
-                return self._handle_upload(qs)
-            if path == '/api/attachment/delete':
-                d = json.loads(self._read_body() or b'{}')
-                return self._attachment_delete(d)
-            # ── 页面生命周期：全部关闭后自动退出 ──────────────────
-            if path == '/api/page/open':
-                d = json.loads(self._read_body() or b'{}')
-                pid = str(d.get('id') or '')[:64]
-                n = self.app.page_open(pid)
-                return self._json({"ok": True, "pages": n,
-                                   "auto_exit": self.app.auto_exit,
-                                   "grace_s": self.app.auto_exit_grace_s})
-            if path == '/api/page/close':
-                # sendBeacon 的 body 是 text/plain，id 走 query 最省事
-                pid = (qs.get('id') or [''])[0][:64]
-                if not pid:
-                    try:
-                        pid = str(json.loads(self._read_body() or b'{}')
-                                  .get('id') or '')[:64]
-                    except Exception:
-                        pid = ''
-                return self._json({"ok": True, "pages": self.app.page_close(pid)})
-            if path == '/api/page/alive':
-                pid = (qs.get('id') or [''])[0][:64]
-                self.app.page_touch(pid)
-                return self._json({"ok": True})
-            if path == '/api/stop':
-                ag = self.app._running
-                if ag is None:
-                    return self._json({"ok": True, "running": False})
-                cid = self._client_id()
-                owner = self.app._running_owner or ''
-                # 局域网多人：只能停自己发起的那一轮（否则 B 会随手把 A 的任务停了）
-                if not owner or not cid or owner != cid:
-                    return self._err(403, '任务发起者身份缺失或不匹配，拒绝停止')
-                ag.request_stop()
-                return self._json({"ok": True, "running": True})
-            if path == '/api/extend':
-                # 「再等 5 分钟」：延长当前轮的看门狗（不做就没有这轮了，只能重试）
-                d = json.loads(self._read_body() or b'{}')
-                try:
-                    add = max(60, min(3600, int(d.get('seconds') or 300)))
-                except (TypeError, ValueError):
-                    add = 300
-                w = self.app._running_watch
-                if not w:
-                    return self._json({"ok": True, "extended": False})
-                cid = self._client_id()
-                owner = self.app._running_owner or ''
-                if not owner or not cid or owner != cid:
-                    return self._err(403, '任务发起者身份缺失或不匹配，拒绝延长')
-                w['deadline'] += add
-                log.info('看门狗延长 +%ss（%s）', add, cid or '本机')
-                return self._json({"ok": True, "extended": True, "seconds": add})
-            if path == '/api/confirm':
-                d = json.loads(self._read_body() or b'{}')
-                st = self.app.submit_confirm(bool(d.get('approved')), self._client_id())
-                if st == 'forbidden':
-                    return self._err(403, '只能由发起该任务的浏览器确认')
-                return self._json({"ok": True, "applied": st == 'ok'})
-            if path == '/api/answer':
-                d = json.loads(self._read_body() or b'{}')
-                st = self.app.submit_answer(str(d.get('answer') or ''), self._client_id())
-                if st == 'forbidden':
-                    return self._err(403, '只能由发起该任务的浏览器回答')
-                return self._json({"ok": True, "applied": st == 'ok'})
-            if path == '/api/artifact/restore':
-                # 恢复产物到某个历史版本（恢复前当前版会先存一版，可再反悔）
-                d = json.loads(self._read_body() or b'{}')
-                rel = str(d.get('path') or '')
-                ts = str(d.get('ts') or '')
-                if not rel or not ts:
-                    return self._err(400, '缺少 path / ts')
-                try:
-                    r = self.app.ws.restore_version(rel, ts)
-                except PermissionError as e:
-                    return self._err(400, str(e))
-                except FileNotFoundError as e:
-                    return self._err(404, str(e))
-                except ValueError as e:
-                    return self._err(400, str(e))
-                log.info('产物版本恢复: %s <- %s', rel, ts)
-                return self._json({"ok": True, **r})
-            if path == '/api/batch':
-                # 创建批量作业（B8）
-                d = json.loads(self._read_body() or b'{}')
-                try:
-                    job = self.app.batch.create(d.get('name'), d.get('template'),
-                                                d.get('files'),
-                                                bool(d.get('preview')))
-                except PermissionError as e:
-                    return self._err(400, str(e))
-                except FileNotFoundError as e:
-                    return self._err(404, str(e))
-                except ValueError as e:
-                    return self._err(400, str(e))
-                log.info('批量作业创建: %s (%d 项)', job['name'], len(job['items']))
-                return self._json({"ok": True, "job": self.app.batch._summary(job)})
-            if path == '/api/batch/control':
-                # 暂停 / 继续 / 取消 / 重试失败项
-                d = json.loads(self._read_body() or b'{}')
-                jid = str(d.get('id') or '')
-                action = str(d.get('action') or '')
-                if not valid_job_id(jid):
-                    return self._err(400, '非法作业 id')
-                try:
-                    job = self.app.batch.control(jid, action)
-                except PermissionError as e:
-                    return self._err(400, str(e))
-                except FileNotFoundError as e:
-                    return self._err(404, str(e))
-                except ValueError as e:
-                    return self._err(400, str(e))
-                return self._json({"ok": True, "job": self.app.batch._summary(job)})
-            if path == '/api/undo':
-                d = json.loads(self._read_body() or b'{}')
-                sid = str(d.get('session_id') or '')
-                turn = str(d.get('turn') or '')
-                if not sid or not turn:
-                    return self._err(400, '缺少 session_id / turn')
-                try:
-                    r = self.app.ws.undo_turn(sid, turn)
-                except FileNotFoundError as e:
-                    return self._err(404, str(e))
-                except Exception as e:
-                    return self._err(500, f'撤销失败: {e}')
-                if r.get('refused'):
-                    # 文件已被用户改过、正确拒绝覆盖：不得标记已撤销，
-                    # 更不能让前端弹“已撤销”。
-                    return self._json({"ok": False, **r}, 409)
-                try:
-                    self.app.sessions.mark_turn_undone(sid, turn)
-                except Exception as e:
-                    log.warning('标记撤销状态失败: %s', e)
-                log.info('撤销第 %s 轮: 还原 %s 个 / 删除 %s 个',
-                         turn, r.get('restored'), r.get('removed'))
-                return self._json({"ok": True, **r})
-            if path == '/api/workspace/delete':
-                d = json.loads(self._read_body() or b'{}')
-                return self._workspace_delete(d.get('path', ''))
-            if path == '/api/ui':
-                from server.storepath import save_ui
-                d = json.loads(self._read_body() or b'{}')
-                if not isinstance(d, dict):
-                    return self._err(400, '界面偏好必须是对象')
-                saved = save_ui(str(self.app.ws.root), d)
-                return self._json(saved)
-            if path == '/api/settings':
-                d = json.loads(self._read_body() or b'{}')
-                # 工作台目录（D）：只校验 + 写 config，热切换风险大（会话/记忆/RAG/作业
-                # 都绑在当前 root 上），所以留到重启生效。
-                wsr = str((d.get('workspace') or {}).get('root') or '').strip()
-                if wsr:
-                    try:
-                        if self.app.program_dir:
-                            from server.storepath import abspath_from_program
-                            wsr = abspath_from_program(self.app.program_dir, wsr)
-                        cand = Workspace(wsr)
-                    except (ValueError, PermissionError) as e:
-                        return self._err(400, f'工作台路径无效: {e}')
-                    cfg_root = str(((self.app.config.get('workspace') or {})
-                                    .get('root') or self.app.ws.root))
-                    same_cfg = (os.path.normcase(os.path.abspath(str(cand.root)))
-                                == os.path.normcase(os.path.abspath(cfg_root)))
-                    if not same_cfg:
-                        # 与「已保存值」比，而不是与运行中的 root 比：
-                        # 否则改回当前目录时永远写不回去，restart_required 会卡在 true
-                        _old_root = (self.app.config.get('workspace') or {}).get('root')
-                        self.app.config.setdefault('workspace', {})['root'] = \
-                            str(cand.root)
-                        try:
-                            self.app._persist()
-                        except Exception:
-                            self.app.config.setdefault('workspace', {})['root'] = _old_root
-                            raise
-                        if self.app.program_dir:
-                            from server.storepath import write_pointer
-                            write_pointer(self.app.program_dir, str(cand.root))
-                        log.info('工作台目录已改（重启生效）: %s', cand.root)
-                self.app.save_config(model=d.get('model'), limits=d.get('limits'),
-                                     rag=d.get('rag'), security=d.get('security'),
-                                     prompt=d.get('prompt'), memory=d.get('memory'))
-                if d.get('mcp') is not None:
-                    self.app.set_mcp_enabled(d.get('mcp') or [])
-                return self._json(self._settings())
-            if path == '/api/mcp/reload':
-                # 手动重连某个 MCP server（B5）
-                d = json.loads(self._read_body() or b'{}')
-                from agent.mcp import manager as _mcp_mgr
-                ok = _mcp_mgr.restart(str(d.get('name') or ''))
-                return self._json({'ok': ok, 'mcp': _mcp_status()})
-            if path == '/api/mcp/resource':
-                # 读取 MCP resource 内容（B5 补：resources/read）
-                d = json.loads(self._read_body() or b'{}')
-                from agent.mcp import McpError, manager as _mcp_mgr
-                try:
-                    txt = _mcp_mgr.read_resource(str(d.get('server') or ''),
-                                                 str(d.get('uri') or ''))
-                except McpError as e:
-                    return self._err(400, str(e))
-                return self._json({'ok': True, 'text': txt})
-            if path == '/api/mcp/save':
-                # 设置页新增/编辑 MCP server（无需手改 config.json）
-                d = json.loads(self._read_body() or b'{}')
-                srv = d.get('server') or d
-                try:
-                    servers = self.app.save_mcp_server(
-                        srv, str(d.get('original_name') or ''))
-                except ValueError as e:
-                    return self._err(400, str(e))
-                return self._json({"ok": True, "mcp": _mcp_status(),
-                                   "servers": servers})
-            if path == '/api/mcp/delete':
-                d = json.loads(self._read_body() or b'{}')
-                try:
-                    servers = self.app.delete_mcp_server(str(d.get('name') or ''))
-                except ValueError as e:
-                    return self._err(400, str(e))
-                return self._json({"ok": True, "mcp": _mcp_status(),
-                                   "servers": servers})
-            if path == '/api/compact':
-                # 手动压缩本会话历史（长会话主动释放上下文）
-                return self._compact_session()
-            if path == '/api/mcp/prompt':
-                # 取 MCP prompt 文本（B5 补：prompts/get），前端一键填进输入框
-                d = json.loads(self._read_body() or b'{}')
-                from agent.mcp import McpError, manager as _mcp_mgr
-                try:
-                    txt = _mcp_mgr.get_prompt(str(d.get('server') or ''),
-                                              str(d.get('name') or ''))
-                except McpError as e:
-                    return self._err(400, str(e))
-                return self._json({'ok': True, 'text': txt})
-            if path == '/api/project':
-                d = json.loads(self._read_body() or b'{}')
-                return self._save_project_file(str(d.get('rel') or ''), str(d.get('content') or ''))
-            if path == '/api/templates':
-                d = json.loads(self._read_body(limit=1024 * 1024) or b'{}')
-                self.app.save_templates(d.get('templates') or [])
-                return self._json({"ok": True, "templates": self.app.load_templates()})
-            if path == '/api/test_llm':
-                return self._test_llm()
-            if path == '/api/rag/index':
-                return self._json(self.app.rag.refresh())
-            if path == '/api/memory/delete':
-                d = json.loads(self._read_body() or b'{}')
-                self.app.memory.delete_fact(int(d.get('id', 0)))
-                return self._json({"ok": True})
-            if path == '/api/memory/update':
-                d = json.loads(self._read_body() or b'{}')
-                self.app.memory.update_fact(int(d.get('id', 0)), d.get('content', ''))
-                return self._json({"ok": True})
-            if path == '/api/memory/important':
-                d = json.loads(self._read_body() or b'{}')
-                self.app.memory.set_important(int(d.get('id', 0)), bool(d.get('important')))
-                return self._json({"ok": True})
-            if path == '/api/memory/tags':
-                d = json.loads(self._read_body() or b'{}')
-                tags = d.get('tags')
-                if tags is None:
-                    self.app.memory.add_tag(int(d.get('id', 0)), d.get('tag', ''))
-                else:
-                    self.app.memory.set_tags(int(d.get('id', 0)), tags)
-                return self._json({"ok": True})
-            if path == '/api/memory/add':
-                d = json.loads(self._read_body() or b'{}')
-                self.app.memory.save_fact(d.get('content', ''), source=d.get('source', 'manual'),
-                                          important=bool(d.get('important')))
-                return self._json({"ok": True})
-            if path == '/api/memory/pref':
-                d = json.loads(self._read_body() or b'{}')
-                self.app.memory.save_pref(d.get('key', ''), d.get('value', ''))
-                return self._json({"ok": True})
+            name = self._POST_ROUTES.get(path)
+            if name is not None:
+                return getattr(self, name)(qs)
             return self._err(404, 'not found')
         except Exception as e:
             self._err(500, f'{type(e).__name__}: {e}')
+
+
+    def _post_api_chat(self, qs):
+        return self._handle_chat()
+
+    def _post_api_session_new(self, qs):
+        d = self._read_json_body()
+        s = self.app.sessions.create(d.get('title') or '新会话')
+        return self._json({"session": s.to_meta()})
+
+    def _post_api_session_rename(self, qs):
+        d = self._read_json_body()
+        self.app.sessions.rename(d['id'], d.get('title') or '新会话')
+        return self._json({"ok": True})
+
+    def _post_api_session_delete(self, qs):
+        d = self._read_json_body()
+        self.app.sessions.delete(d['id'])
+        return self._json({"ok": True})
+
+    def _post_api_session_pin(self, qs):
+        d = self._read_json_body()
+        self.app.sessions.set_pinned(d['id'], bool(d.get('pinned')))
+        return self._json({"ok": True})
+
+    def _post_api_session_regenerate(self, qs):
+        d = self._read_json_body()
+        try:
+            self.app.sessions.pop_trailing_assistant(d['id'])
+        except (ValueError, FileNotFoundError):
+            return self._err(404, '会话不存在')
+        return self._json({"ok": True})
+
+    def _post_api_session_fork(self, qs):
+        # 从某条消息分叉出新会话（「从这里分支」）
+        d = self._read_json_body()
+        sid = str(d.get('id') or '')
+        if not sid:
+            return self._err(400, '缺少 id')
+        try:
+            s = self.app.sessions.fork(sid, int(d.get('index') or 0))
+        except ValueError as e:
+            return self._err(400, str(e))
+        log.info('会话分叉: %s -> %s (index=%s)', sid, s.id, d.get('index'))
+        return self._json({"ok": True, "session": s.to_meta()})
+
+    def _post_api_session_truncate(self, qs):
+        # 删除某条及其之后的对话（编辑重发 / 删除该轮）
+        d = self._read_json_body()
+        sid = str(d.get('id') or '')
+        if not sid:
+            return self._err(400, '缺少 id')
+        removed = self.app.sessions.truncate(sid, int(d.get('index') or 0))
+        log.info('会话截断: %s 从 index=%s 起删除 %s 条', sid, d.get('index'), removed)
+        return self._json({"ok": True, "removed": removed})
+
+    def _post_api_note(self, qs):
+        d = self._read_json_body(limit=2 * 1024 * 1024)
+        return self._save_note(d)
+
+    def _post_api_upload(self, qs):
+        return self._handle_upload(qs)
+
+    def _post_api_attachment_delete(self, qs):
+        d = self._read_json_body()
+        return self._attachment_delete(d)
+
+    def _post_api_page_open(self, qs):
+        d = self._read_json_body()
+        pid = str(d.get('id') or '')[:64]
+        n = self.app.page_open(pid)
+        return self._json({"ok": True, "pages": n,
+                           "auto_exit": self.app.auto_exit,
+                           "grace_s": self.app.auto_exit_grace_s})
+
+    def _post_api_page_close(self, qs):
+        # sendBeacon 的 body 是 text/plain，id 走 query 最省事
+        pid = (qs.get('id') or [''])[0][:64]
+        if not pid:
+            try:
+                pid = str(self._read_json_body()
+                          .get('id') or '')[:64]
+            except Exception:
+                pid = ''
+        return self._json({"ok": True, "pages": self.app.page_close(pid)})
+
+    def _post_api_page_alive(self, qs):
+        pid = (qs.get('id') or [''])[0][:64]
+        self.app.page_touch(pid)
+        return self._json({"ok": True})
+
+    def _post_api_stop(self, qs):
+        ag = self.app._running
+        if ag is None:
+            return self._json({"ok": True, "running": False})
+        cid = self._client_id()
+        owner = self.app._running_owner or ''
+        # 局域网多人：只能停自己发起的那一轮（否则 B 会随手把 A 的任务停了）
+        if not owner or not cid or owner != cid:
+            return self._err(403, '任务发起者身份缺失或不匹配，拒绝停止')
+        ag.request_stop()
+        return self._json({"ok": True, "running": True})
+
+    def _post_api_extend(self, qs):
+        # 「再等 5 分钟」：延长当前轮的看门狗（不做就没有这轮了，只能重试）
+        d = self._read_json_body()
+        try:
+            add = max(60, min(3600, int(d.get('seconds') or 300)))
+        except (TypeError, ValueError):
+            add = 300
+        w = self.app._running_watch
+        if not w:
+            return self._json({"ok": True, "extended": False})
+        cid = self._client_id()
+        owner = self.app._running_owner or ''
+        if not owner or not cid or owner != cid:
+            return self._err(403, '任务发起者身份缺失或不匹配，拒绝延长')
+        w['deadline'] += add
+        log.info('看门狗延长 +%ss（%s）', add, cid or '本机')
+        return self._json({"ok": True, "extended": True, "seconds": add})
+
+    def _post_api_confirm(self, qs):
+        d = self._read_json_body()
+        st = self.app.submit_confirm(bool(d.get('approved')), self._client_id())
+        if st == 'forbidden':
+            return self._err(403, '只能由发起该任务的浏览器确认')
+        return self._json({"ok": True, "applied": st == 'ok'})
+
+    def _post_api_answer(self, qs):
+        d = self._read_json_body()
+        st = self.app.submit_answer(str(d.get('answer') or ''), self._client_id())
+        if st == 'forbidden':
+            return self._err(403, '只能由发起该任务的浏览器回答')
+        return self._json({"ok": True, "applied": st == 'ok'})
+
+    def _post_api_artifact_restore(self, qs):
+        # 恢复产物到某个历史版本（恢复前当前版会先存一版，可再反悔）
+        d = self._read_json_body()
+        rel = str(d.get('path') or '')
+        ts = str(d.get('ts') or '')
+        if not rel or not ts:
+            return self._err(400, '缺少 path / ts')
+        try:
+            r = self.app.ws.restore_version(rel, ts)
+        except PermissionError as e:
+            return self._err(400, str(e))
+        except FileNotFoundError as e:
+            return self._err(404, str(e))
+        except ValueError as e:
+            return self._err(400, str(e))
+        log.info('产物版本恢复: %s <- %s', rel, ts)
+        return self._json({"ok": True, **r})
+
+    def _post_api_batch(self, qs):
+        # 创建批量作业（B8）
+        d = self._read_json_body()
+        try:
+            job = self.app.batch.create(d.get('name'), d.get('template'),
+                                        d.get('files'),
+                                        bool(d.get('preview')))
+        except PermissionError as e:
+            return self._err(400, str(e))
+        except FileNotFoundError as e:
+            return self._err(404, str(e))
+        except ValueError as e:
+            return self._err(400, str(e))
+        log.info('批量作业创建: %s (%d 项)', job['name'], len(job['items']))
+        return self._json({"ok": True, "job": self.app.batch._summary(job)})
+
+    def _post_api_batch_control(self, qs):
+        # 暂停 / 继续 / 取消 / 重试失败项
+        d = self._read_json_body()
+        jid = str(d.get('id') or '')
+        action = str(d.get('action') or '')
+        if not valid_job_id(jid):
+            return self._err(400, '非法作业 id')
+        try:
+            job = self.app.batch.control(jid, action)
+        except PermissionError as e:
+            return self._err(400, str(e))
+        except FileNotFoundError as e:
+            return self._err(404, str(e))
+        except ValueError as e:
+            return self._err(400, str(e))
+        return self._json({"ok": True, "job": self.app.batch._summary(job)})
+
+    def _post_api_undo(self, qs):
+        d = self._read_json_body()
+        sid = str(d.get('session_id') or '')
+        turn = str(d.get('turn') or '')
+        if not sid or not turn:
+            return self._err(400, '缺少 session_id / turn')
+        try:
+            r = self.app.ws.undo_turn(sid, turn)
+        except FileNotFoundError as e:
+            return self._err(404, str(e))
+        except Exception as e:
+            return self._err(500, f'撤销失败: {e}')
+        if r.get('refused'):
+            # 文件已被用户改过、正确拒绝覆盖：不得标记已撤销，
+            # 更不能让前端弹“已撤销”。
+            return self._json({"ok": False, **r}, 409)
+        try:
+            self.app.sessions.mark_turn_undone(sid, turn)
+        except Exception as e:
+            log.warning('标记撤销状态失败: %s', e)
+        log.info('撤销第 %s 轮: 还原 %s 个 / 删除 %s 个',
+                 turn, r.get('restored'), r.get('removed'))
+        return self._json({"ok": True, **r})
+
+    def _post_api_workspace_delete(self, qs):
+        d = self._read_json_body()
+        return self._workspace_delete(d.get('path', ''))
+
+    def _post_api_ui(self, qs):
+        from server.storepath import save_ui
+        d = self._read_json_body()
+        if not isinstance(d, dict):
+            return self._err(400, '界面偏好必须是对象')
+        saved = save_ui(str(self.app.ws.root), d)
+        return self._json(saved)
+
+    def _post_api_settings(self, qs):
+        d = self._read_json_body()
+        # 工作台目录（D）：只校验 + 写 config，热切换风险大（会话/记忆/RAG/作业
+        # 都绑在当前 root 上），所以留到重启生效。
+        wsr = str((d.get('workspace') or {}).get('root') or '').strip()
+        if wsr:
+            try:
+                if self.app.program_dir:
+                    from server.storepath import abspath_from_program
+                    wsr = abspath_from_program(self.app.program_dir, wsr)
+                cand = Workspace(wsr)
+            except (ValueError, PermissionError) as e:
+                return self._err(400, f'工作台路径无效: {e}')
+            cfg_root = str(((self.app.config.get('workspace') or {})
+                            .get('root') or self.app.ws.root))
+            same_cfg = (os.path.normcase(os.path.abspath(str(cand.root)))
+                        == os.path.normcase(os.path.abspath(cfg_root)))
+            if not same_cfg:
+                # 与「已保存值」比，而不是与运行中的 root 比：
+                # 否则改回当前目录时永远写不回去，restart_required 会卡在 true
+                _old_root = (self.app.config.get('workspace') or {}).get('root')
+                self.app.config.setdefault('workspace', {})['root'] = \
+                    str(cand.root)
+                try:
+                    self.app._persist()
+                except Exception:
+                    self.app.config.setdefault('workspace', {})['root'] = _old_root
+                    raise
+                if self.app.program_dir:
+                    from server.storepath import write_pointer
+                    write_pointer(self.app.program_dir, str(cand.root))
+                log.info('工作台目录已改（重启生效）: %s', cand.root)
+        self.app.save_config(model=d.get('model'), limits=d.get('limits'),
+                             rag=d.get('rag'), security=d.get('security'),
+                             prompt=d.get('prompt'), memory=d.get('memory'))
+        if d.get('mcp') is not None:
+            self.app.set_mcp_enabled(d.get('mcp') or [])
+        return self._json(self._settings())
+
+    def _post_api_mcp_reload(self, qs):
+        # 手动重连某个 MCP server（B5）
+        d = self._read_json_body()
+        from agent.mcp import manager as _mcp_mgr
+        ok = _mcp_mgr.restart(str(d.get('name') or ''))
+        return self._json({'ok': ok, 'mcp': _mcp_status()})
+
+    def _post_api_mcp_resource(self, qs):
+        # 读取 MCP resource 内容（B5 补：resources/read）
+        d = self._read_json_body()
+        from agent.mcp import McpError, manager as _mcp_mgr
+        try:
+            txt = _mcp_mgr.read_resource(str(d.get('server') or ''),
+                                         str(d.get('uri') or ''))
+        except McpError as e:
+            return self._err(400, str(e))
+        return self._json({'ok': True, 'text': txt})
+
+    def _post_api_mcp_save(self, qs):
+        # 设置页新增/编辑 MCP server（无需手改 config.json）
+        d = self._read_json_body()
+        srv = d.get('server') or d
+        try:
+            servers = self.app.save_mcp_server(
+                srv, str(d.get('original_name') or ''))
+        except ValueError as e:
+            return self._err(400, str(e))
+        return self._json({"ok": True, "mcp": _mcp_status(),
+                           "servers": servers})
+
+    def _post_api_mcp_delete(self, qs):
+        d = self._read_json_body()
+        try:
+            servers = self.app.delete_mcp_server(str(d.get('name') or ''))
+        except ValueError as e:
+            return self._err(400, str(e))
+        return self._json({"ok": True, "mcp": _mcp_status(),
+                           "servers": servers})
+
+    def _post_api_compact(self, qs):
+        # 手动压缩本会话历史（长会话主动释放上下文）
+        return self._compact_session()
+
+    def _post_api_mcp_prompt(self, qs):
+        # 取 MCP prompt 文本（B5 补：prompts/get），前端一键填进输入框
+        d = self._read_json_body()
+        from agent.mcp import McpError, manager as _mcp_mgr
+        try:
+            txt = _mcp_mgr.get_prompt(str(d.get('server') or ''),
+                                      str(d.get('name') or ''))
+        except McpError as e:
+            return self._err(400, str(e))
+        return self._json({'ok': True, 'text': txt})
+
+    def _post_api_project(self, qs):
+        d = self._read_json_body()
+        return self._save_project_file(str(d.get('rel') or ''), str(d.get('content') or ''))
+
+    def _post_api_templates(self, qs):
+        d = self._read_json_body(limit=1024 * 1024)
+        self.app.save_templates(d.get('templates') or [])
+        return self._json({"ok": True, "templates": self.app.load_templates()})
+
+    def _post_api_test_llm(self, qs):
+        return self._test_llm()
+
+    def _post_api_rag_index(self, qs):
+        return self._json(self.app.rag.refresh())
+
+    def _post_api_memory_delete(self, qs):
+        d = self._read_json_body()
+        self.app.memory.delete_fact(int(d.get('id', 0)))
+        return self._json({"ok": True})
+
+    def _post_api_memory_update(self, qs):
+        d = self._read_json_body()
+        self.app.memory.update_fact(int(d.get('id', 0)), d.get('content', ''))
+        return self._json({"ok": True})
+
+    def _post_api_memory_important(self, qs):
+        d = self._read_json_body()
+        self.app.memory.set_important(int(d.get('id', 0)), bool(d.get('important')))
+        return self._json({"ok": True})
+
+    def _post_api_memory_tags(self, qs):
+        d = self._read_json_body()
+        tags = d.get('tags')
+        if tags is None:
+            self.app.memory.add_tag(int(d.get('id', 0)), d.get('tag', ''))
+        else:
+            self.app.memory.set_tags(int(d.get('id', 0)), tags)
+        return self._json({"ok": True})
+
+    def _post_api_memory_add(self, qs):
+        d = self._read_json_body()
+        self.app.memory.save_fact(d.get('content', ''), source=d.get('source', 'manual'),
+                                  important=bool(d.get('important')))
+        return self._json({"ok": True})
+
+    def _post_api_memory_pref(self, qs):
+        d = self._read_json_body()
+        self.app.memory.save_pref(d.get('key', ''), d.get('value', ''))
+        return self._json({"ok": True})
+
 
     # ── 工作台目录浏览/删除 ──────────────────────────────────────
     def _workspace_tree(self):
@@ -2284,6 +2451,185 @@ class Handler(BaseHTTPRequestHandler):
                     return
             time.sleep(0.2)
 
+    def _chat_begin(self):
+        """解析请求、建/取会话、落盘用户消息、发 SSE 头。
+        已回响应（400/去重跟随）时返回 None，调用方直接 return；
+        否则返回本轮上下文。"""
+        app = self.app
+        d = self._read_json_body()
+        message = (d.get('message') or '').strip()
+        mode = d.get('mode') or 'craft'
+        regenerate = bool(d.get('regenerate'))
+        if not message:
+            self._err(400, '消息为空')
+            return None
+
+        # 附件：前端随消息带上用户已上传的文件（inputs/ 等工作台内路径）
+        # 校验只放行工作台内真实存在的普通文件（防越界/防敏感文件），
+        # 然后注入到发给模型的消息上下文里，让 AI 知道并读取附件。
+        valid_att = _validate_attachments(app.ws, d.get('attachments'))
+
+        req_id = str(d.get('client_req_id') or '').strip()
+        if req_id and not re.fullmatch(r'[A-Za-z0-9_-]{8,64}', req_id):
+            self._err(400, '非法 client_req_id')
+            return None
+        # 同一个请求再进来时，不能先新建一个空会话。
+        if req_id:
+            existing = app.runs.for_request(req_id)
+            if existing is not None:
+                self._follow_existing_run(existing)
+                return None
+
+        sid = d.get('session_id') or ''
+        if sid:
+            try:
+                session = app.sessions.load(sid)
+            except Exception:
+                self._err(400, '会话不存在')
+                return None
+        else:
+            session = app.sessions.create(app._auto_title(message))
+        sid = session.id
+        # 会话标题自动更新：新会话（无消息、默认标题）首条消息 -> 取消息前 20 字。
+        # 已有内容/用户手动命名过的会话不覆盖。
+        if not session.messages and session.title in ('新会话', ''):
+            new_title = app._auto_title(message)
+            app.sessions.rename(sid, new_title)
+            session.title = new_title
+        app._current_sid = sid
+        req_id = str(d.get('client_req_id') or '').strip()
+        if req_id and not re.fullmatch(r'[A-Za-z0-9_-]{8,64}', req_id):
+            self._err(400, '非法 client_req_id')
+            return None
+        run, created = app.runs.get_or_create(
+            sid, self._client_id(), 'chat', req_id)
+        self._run = run
+        self._detached = False
+        if not created:
+            self._follow_existing_run(run)
+            return None
+
+        user_input = self._build_user_input(message, valid_att)
+        history = self._session_history(session)
+
+        # 先落盘用户消息：即使随后断流/刷新/崩溃，这一轮提问也不会丢
+        if not regenerate:
+            user_extra = {'attachments': valid_att} if valid_att else None
+            app.sessions.add_message(sid, 'user', message, extra=user_extra)
+
+        # SSE 头
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache')
+        # SSE 流结束即断开，前端 fetch reader 收到 done 才正常收尾
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self._sse_started = True
+        return {
+            'd': d, 'message': message, 'mode': mode,
+            'regenerate': regenerate, 'valid_att': valid_att,
+            'sid': sid, 'session': session,
+            'user_input': user_input, 'history': history,
+        }
+
+
+    def _chat_wait_turn(self, app, token, raw_send, dequeue):
+        """排队等模型槽位。拿到返回 True；超时/断连已回响应，返回 False。"""
+        # ── 排队：单任务串行，后到者先推 queued 帧再等待 ──────
+        # 队列的 append/remove/队首判断全程持 _queue_lock：裸 list 操作
+        # 单步虽原子，但"判断队首→占 busy"的组合判断会交错。
+        with app._queue_lock:
+            app._queue.append(self)
+            queued = len(app._queue) > 1 or app.busy
+            position = len(app._queue)
+        if queued:
+            raw_send(f"data: {json.dumps({'type': 'queued', 'position': position}, ensure_ascii=False)}\n\n".encode('utf-8'))
+        wait_t0 = time.monotonic()
+        wait_tick = 0
+        while True:
+            with app._queue_lock:
+                at_head = bool(app._queue) and app._queue[0] is self
+                busy = app.busy
+            if at_head and not busy:
+                break
+            if time.monotonic() - wait_t0 > app.chat_timeout_s:
+                dequeue()
+                raw_send(f"data: {json.dumps({'type': 'error', 'message': '排队超时，已取消。请重试。'}, ensure_ascii=False)}\n\n".encode('utf-8'))
+                return False
+            # 死连接感知：客户端已断开则退出排队，不挂满超时时间占线程
+            wait_tick += 1
+            if wait_tick % 4 == 0 and not self._client_alive():
+                dequeue()
+                return False
+            time.sleep(0.5)
+        with app._busy_lock:
+            app._busy = True
+            app._busy_owner = token
+            dequeue()
+        return True
+
+
+    def _chat_run_agent(self, app, agent, history, user_input, mode,
+                        message, result_box, run_t0, release_busy):
+        """在独立线程里跑 Agent 一轮（拿模型槽 -> agent.run -> 记 jobs 台账）。"""
+        held = False
+        try:
+            # 与批量作业共用模型槽：交互优先，拿不到槽就不跑第二遍。
+            held = app.gate.acquire(
+                'chat', timeout=app.chat_timeout_s,
+                stop=lambda: agent.stop_requested())
+            if not held:
+                if agent.stop_requested():
+                    result_box['r'] = {
+                        'response': '', 'reasoning': '',
+                        'tool_steps': [], 'artifacts': [],
+                        'stopped': True, 'stop_uncertain': False,
+                        'usage': {}, 'todos': [], 'context': {},
+                        'citations': [],
+                    }
+                    result_box['ok'] = True
+                else:
+                    result_box['e'] = '未获得模型槽位（等待超时）'
+                return
+            result_box['r'] = agent.run(history, user_input, mode=mode)
+            result_box['ok'] = True
+        except LLMError as e:
+            if agent.stop_requested():
+                # 主动停止触发的中止不是失败：走 result 帧，
+                # run 标 stopped（core 正常路径已先接住，这里兜底）。
+                result_box['r'] = {
+                    'response': '', 'reasoning': '',
+                    'tool_steps': [], 'artifacts': [],
+                    'stopped': True, 'stop_uncertain': False,
+                    'usage': {}, 'todos': [], 'context': {},
+                    'citations': [],
+                }
+                result_box['ok'] = True
+            else:
+                result_box['e'] = str(e)
+                log.warning('对话失败(LLM): %s', e)
+        except Exception as e:
+            result_box['e'] = f'{type(e).__name__}: {e}'
+            log.exception('对话失败: %s', e)
+        finally:
+            if held:
+                try:
+                    app.gate.release()
+                except Exception:
+                    pass
+            release_busy()
+            r = result_box.get('r')
+            app._jobs.insert(0, {
+                'message': message[:200],
+                'ok': 'r' in result_box,
+                'response': (r.get('response') if r else '')[:200],
+                'elapsed_s': round(time.monotonic() - run_t0, 1),
+                'done_at': time.strftime('%H:%M:%S'),
+            })
+            del app._jobs[20:]
+
+
+
     def _handle_chat(self):
         app = self.app
         self._sse_started = False
@@ -2309,69 +2655,19 @@ class Handler(BaseHTTPRequestHandler):
                     pass
 
         try:
-            d = json.loads(self._read_body() or b'{}')
-            message = (d.get('message') or '').strip()
-            mode = d.get('mode') or 'craft'
-            regenerate = bool(d.get('regenerate'))
-            if not message:
-                return self._err(400, '消息为空')
+            ctx = self._chat_begin()
+            if ctx is None:
+                return
+            d = ctx['d']
+            message = ctx['message']
+            mode = ctx['mode']
+            regenerate = ctx['regenerate']
+            valid_att = ctx['valid_att']
+            sid = ctx['sid']
+            session = ctx['session']
+            user_input = ctx['user_input']
+            history = ctx['history']
 
-            # 附件：前端随消息带上用户已上传的文件（inputs/ 等工作台内路径）
-            # 校验只放行工作台内真实存在的普通文件（防越界/防敏感文件），
-            # 然后注入到发给模型的消息上下文里，让 AI 知道并读取附件。
-            valid_att = _validate_attachments(app.ws, d.get('attachments'))
-
-            req_id = str(d.get('client_req_id') or '').strip()
-            if req_id and not re.fullmatch(r'[A-Za-z0-9_-]{8,64}', req_id):
-                return self._err(400, '非法 client_req_id')
-            # 同一个请求再进来时，不能先新建一个空会话。
-            if req_id:
-                existing = app.runs.for_request(req_id)
-                if existing is not None:
-                    return self._follow_existing_run(existing)
-
-            sid = d.get('session_id') or ''
-            if sid:
-                try:
-                    session = app.sessions.load(sid)
-                except Exception:
-                    return self._err(400, '会话不存在')
-            else:
-                session = app.sessions.create(app._auto_title(message))
-            sid = session.id
-            # 会话标题自动更新：新会话（无消息、默认标题）首条消息 -> 取消息前 20 字。
-            # 已有内容/用户手动命名过的会话不覆盖。
-            if not session.messages and session.title in ('新会话', ''):
-                new_title = app._auto_title(message)
-                app.sessions.rename(sid, new_title)
-                session.title = new_title
-            app._current_sid = sid
-            req_id = str(d.get('client_req_id') or '').strip()
-            if req_id and not re.fullmatch(r'[A-Za-z0-9_-]{8,64}', req_id):
-                return self._err(400, '非法 client_req_id')
-            run, created = app.runs.get_or_create(
-                sid, self._client_id(), 'chat', req_id)
-            self._run = run
-            self._detached = False
-            if not created:
-                return self._follow_existing_run(run)
-
-            user_input = self._build_user_input(message, valid_att)
-            history = self._session_history(session)
-
-            # 先落盘用户消息：即使随后断流/刷新/崩溃，这一轮提问也不会丢
-            if not regenerate:
-                user_extra = {'attachments': valid_att} if valid_att else None
-                app.sessions.add_message(sid, 'user', message, extra=user_extra)
-
-            # SSE 头
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
-            self.send_header('Cache-Control', 'no-cache')
-            # SSE 流结束即断开，前端 fetch reader 收到 done 才正常收尾
-            self.send_header('Connection', 'close')
-            self.end_headers()
-            self._sse_started = True
 
             send_lock = threading.Lock()
 
@@ -2399,41 +2695,14 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
 
-            # ── 排队：单任务串行，后到者先推 queued 帧再等待 ──────
-            # 队列的 append/remove/队首判断全程持 _queue_lock：裸 list 操作
-            # 单步虽原子，但"判断队首→占 busy"的组合判断会交错。
-            with app._queue_lock:
-                app._queue.append(self)
-                queued = len(app._queue) > 1 or app.busy
-                position = len(app._queue)
-            if queued:
-                raw_send(f"data: {json.dumps({'type': 'queued', 'position': position}, ensure_ascii=False)}\n\n".encode('utf-8'))
-            wait_t0 = time.monotonic()
-            wait_tick = 0
-            while True:
-                with app._queue_lock:
-                    at_head = bool(app._queue) and app._queue[0] is self
-                    busy = app.busy
-                if at_head and not busy:
-                    break
-                if time.monotonic() - wait_t0 > app.chat_timeout_s:
-                    _dequeue()
-                    raw_send(f"data: {json.dumps({'type': 'error', 'message': '排队超时，已取消。请重试。'}, ensure_ascii=False)}\n\n".encode('utf-8'))
-                    return
-                # 死连接感知：客户端已断开则退出排队，不挂满超时时间占线程
-                wait_tick += 1
-                if wait_tick % 4 == 0 and not self._client_alive():
-                    _dequeue()
-                    return
-                time.sleep(0.5)
-            with app._busy_lock:
-                app._busy = True
-                app._busy_owner = token
-                _dequeue()
+            if not self._chat_wait_turn(app, token, raw_send, _dequeue):
+                return
+
 
             # ── 每个请求一个独立 Agent（回调各自绑定本连接，不串会话）──
-            ctx = app.sessions.session_ctx(session)
-            agent, box = app.make_agent(ctx, send, model=d.get('model'))
+            # 变量名 sctx：避免与上面 _chat_begin 返回的 ctx dict 重名
+            sctx = app.sessions.session_ctx(session)
+            agent, box = app.make_agent(sctx, send, model=d.get('model'))
             box.alive = self._client_alive          # 提问时感知断开，不空等 180s
             box.owner = self._client_id()           # 局域网：只有发起者能确认/回答/停止
             app._running = agent
@@ -2456,64 +2725,11 @@ class Handler(BaseHTTPRequestHandler):
             result_box = {}
             run_t0 = time.monotonic()
 
-            def run_agent():
-                held = False
-                try:
-                    # 与批量作业共用模型槽：交互优先，拿不到槽就不跑第二遍。
-                    held = app.gate.acquire(
-                        'chat', timeout=app.chat_timeout_s,
-                        stop=lambda: agent.stop_requested())
-                    if not held:
-                        if agent.stop_requested():
-                            result_box['r'] = {
-                                'response': '', 'reasoning': '',
-                                'tool_steps': [], 'artifacts': [],
-                                'stopped': True, 'stop_uncertain': False,
-                                'usage': {}, 'todos': [], 'context': {},
-                                'citations': [],
-                            }
-                            result_box['ok'] = True
-                        else:
-                            result_box['e'] = '未获得模型槽位（等待超时）'
-                        return
-                    result_box['r'] = agent.run(history, user_input, mode=mode)
-                    result_box['ok'] = True
-                except LLMError as e:
-                    if agent.stop_requested():
-                        # 主动停止触发的中止不是失败：走 result 帧，
-                        # run 标 stopped（core 正常路径已先接住，这里兜底）。
-                        result_box['r'] = {
-                            'response': '', 'reasoning': '',
-                            'tool_steps': [], 'artifacts': [],
-                            'stopped': True, 'stop_uncertain': False,
-                            'usage': {}, 'todos': [], 'context': {},
-                            'citations': [],
-                        }
-                        result_box['ok'] = True
-                    else:
-                        result_box['e'] = str(e)
-                        log.warning('对话失败(LLM): %s', e)
-                except Exception as e:
-                    result_box['e'] = f'{type(e).__name__}: {e}'
-                    log.exception('对话失败: %s', e)
-                finally:
-                    if held:
-                        try:
-                            app.gate.release()
-                        except Exception:
-                            pass
-                    release_busy()
-                    r = result_box.get('r')
-                    app._jobs.insert(0, {
-                        'message': message[:200],
-                        'ok': 'r' in result_box,
-                        'response': (r.get('response') if r else '')[:200],
-                        'elapsed_s': round(time.monotonic() - run_t0, 1),
-                        'done_at': time.strftime('%H:%M:%S'),
-                    })
-                    del app._jobs[20:]
-
-            t = threading.Thread(target=run_agent, daemon=True)
+            t = threading.Thread(
+                target=lambda: self._chat_run_agent(
+                    app, agent, history, user_input, mode, message,
+                    result_box, run_t0, release_busy),
+                daemon=True)
             t.start()
 
             # 等待 + 看门狗（周期性心跳保活，防止长任务连接被中间设备掐断）
@@ -2681,7 +2897,7 @@ class Handler(BaseHTTPRequestHandler):
         - 只写 compact.json，下一轮起按「摘要 + 最近 N 条」发绡模型
         - clear=true 则撤销压缩
         """
-        d = json.loads(self._read_body() or b'{}')
+        d = self._read_json_body()
         sid = str(d.get('session_id') or '')
         if not sid:
             return self._err(400, '缺少 session_id')
@@ -2822,7 +3038,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"ok": True, "rel": rel, "chars": len(content)})
 
     def _test_llm(self):
-        d = json.loads(self._read_body(limit=64 * 1024) or b'{}')
+        d = self._read_json_body(limit=64 * 1024)
         if not d.get('base_url') or not d.get('model'):
             return self._err(400, '缺少 base_url 或 model')
         # SSRF 纵深：base_url 完全取自请求体。本地/局域网模型地址是本功能的

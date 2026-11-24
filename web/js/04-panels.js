@@ -520,9 +520,13 @@ function paintScope(d) {
 /* ── 断流续看（B6 最小方案）：刷新页面后仍能看到“上一轮在跑”，
       跑完自动刷新本会话（不必做完整事件回放）── */
 let runSeen = false;
+// 空闲降频：连续多轮无运行任务时，每 6 轮（约 30 秒）才查一次 /api/jobs，
+// 有运行任务或刚跑完时立刻恢复 5 秒一轮。
+let runBannerSkip = 0;
 setInterval(async () => {
   const b = $('#runBanner');
   if (!b) return;
+  if (runBannerSkip > 0) { runBannerSkip--; return; }   // 空闲降频：本轮跳过
   if (state.busy) { b.classList.add('hidden'); return; }   // 本地在跑时由 SSE 负责
   try {
     const r = await fetch('/api/jobs');
@@ -563,6 +567,7 @@ setInterval(async () => {
       await loadSessionMessages();
       toast('✅ 后台任务已完成，会话已刷新');
     }
+    if (!d.running && !runSeen) runBannerSkip = 5;   // 空闲：下 5 轮跳过，约 30 秒后再查
   } catch (e) { /* 断连时由 netBanner 负责提示 */ }
 }, 5000);
 

@@ -30,26 +30,6 @@ else:
     RESOURCE_DIR = HERE
 sys.path.insert(0, HERE)
 
-# 与 config.example.json 对齐：缺的键在这里补齐（值与代码既有默认值一致，
-# 改动前后行为不变）。model.max_tokens: 0 表示不限（llm.py 收到 0 时不发
-# max_tokens 参数、由服务端决定上限），校验器只拦负数；2026-10-30 按此
-# 口径修好，此前 example 写 0 但校验器要求 >0，照 example 配的机子启动即报错。
-DEFAULT_CONFIG = {
-    "model": {"base_url": "http://127.0.0.1:8000/v1", "api_key": "", "name": "qwen",
-              "thinking": "collapse", "max_tokens": 0,
-              "context_window": 32768},
-    "workspace": {"root": os.path.join(os.path.expanduser('~'), '我的工作台')},
-    "server": {"host": "127.0.0.1", "port": 8080,
-               "auto_exit": True, "auto_exit_grace_s": 5},
-    "limits": {"max_upload_mb": 50, "chat_timeout_s": 600,
-               "llm_timeout_s": 300,
-               "compress_threshold_chars": 20000},
-    "rag": {"enabled": True, "top_k": 4},
-    "memory": {"extract": True},
-    "prompt": {"role": "", "rules": []},
-}
-
-
 def check_env(cfg: dict) -> bool:
     """启动环境检测：工作台目录 / 可选办公库 / 前端资源 / 模型服务连通性。
 
@@ -202,30 +182,6 @@ def validate_config(cfg: dict) -> dict:
         if rag['top_k'] <= 0:
             raise ValueError('配置 rag.top_k 必须大于 0')
     return cfg
-
-
-def load_config(path: str) -> dict:
-    cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # 深拷贝默认
-    if os.path.isfile(path):
-        try:
-            with open(path, encoding='utf-8') as f:
-                user = json.load(f)
-        except Exception as e:
-            # 配置文件存在但解析失败：绝不能静默用默认配置启动——默认的
-            # 工作台目录（~/我的工作台）可能根本不是用户的真实工作台，
-            # agent 会在错误的目录里读写。直接报错退出，让用户修配置。
-            raise ValueError(f'配置文件解析失败 {path}：{e}（请修复后重启）')
-        if not isinstance(user, dict):
-            raise ValueError(f'配置文件顶层必须是对象：{path}')
-        for k, v in user.items():
-            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
-                cfg[k].update(v)
-            else:
-                cfg[k] = v
-    else:
-        print(f"⚠️ 未找到配置文件 {path}，已使用默认配置。"
-              f"请参考 config.example.json 创建 config.json")
-    return validate_config(cfg)
 
 
 def main():

@@ -12,6 +12,7 @@
 8. 子 Agent 委托：复杂任务可分解为独立子任务（子 Agent 禁止再委托，防递归）
 """
 import base64
+import functools
 import json
 import re
 import threading
@@ -125,6 +126,11 @@ def estimate_tokens(text) -> int:
             text = json.dumps(text, ensure_ascii=False)
         except Exception:
             text = str(text or '')
+    return _estimate_tokens_str(text)
+
+
+@functools.lru_cache(maxsize=8192)
+def _estimate_tokens_str(text: str) -> int:
     if not text:
         return 0
     cjk = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')

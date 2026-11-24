@@ -333,19 +333,31 @@ class ToolRegistry:
         return self.tools.get(name)
 
     # ── 工具定义 ──────────────────────────────────────────────────
+    # ── 工具定义 ──────────────────────────────────────────────────
     def _register_all(self):
-        ws = self.ws
-        mem = self.memory
+        """按工具分组注册；各分组见 _register_*_tools，MCP 工具另见 _register_mcp。"""
+        self._register_file_tools()
+        self._register_code_tools()
+        self._register_memory_tools()
+        self._register_office_tools()
+        self._register_collab_tools()
+        self._register_mcp()
 
-        def _managed_existing(rel: str):
-            """解析工作台内路径（含 outputs 会话子目录别名），必须存在。"""
-            rel = str(rel).replace('\\', '/').strip()
-            ctx = ws._ctx
-            if ctx and rel in ctx.aliases:
-                rel = ctx.aliases[rel]
-            return ws.resolve_managed(rel, must_exist=True)
+    def _managed_existing(self, rel: str):
+        """解析工作台内路径（含 outputs 会话子目录别名），必须存在。"""
+        rel = str(rel).replace('\\', '/').strip()
+        ws = self.ws
+        ctx = ws._ctx
+        if ctx and rel in ctx.aliases:
+            rel = ctx.aliases[rel]
+        return ws.resolve_managed(rel, must_exist=True)
+
+    def _register_file_tools(self):
+        """文件读写/检索/删除/移动/建目录。"""
+        ws = self.ws
 
         # ── 文件 ────────────────────────────────────────────────
+
         def read_file(a):
             """读取文本文件，支持 offset/limit 分段（大文件/长 SQL 读不全的问题）。"""
             p = ws.resolve_read(a['path'])
@@ -372,10 +384,28 @@ class ToolRegistry:
                           f"如需继续请用 offset={offset + len(chunk)} 再次调用 read_file)")
             return ToolResult(head + chunk)
 
+        self._add("read_file",
+                  "读取文本/代码文件内容（可读任意目录；敏感文件如 .env/.key 会被拦截）。"
+                  "大文件支持分段：offset=起始字符（默认 0）、limit=本段最大字符数（默认 8000），"
+                  "返回末尾会提示剩余长度和续读的 offset",
+                  {"type": "object", "properties": {
+                      "path": {"type": "string", "description": "文件路径（工作台内相对路径或任意绝对路径）"},
+                      "max_mb": {"type": "integer", "description": "最大读取 MB，默认 10"},
+                      "offset": {"type": "integer", "description": "从第几个字符开始读，默认 0（续读用）"},
+                      "limit": {"type": "integer", "description": "本段最大读取字符数，默认 8000"}},
+                   "required": ["path"]}, read_file)
+
         def write_file(a):
             real, rel = ws.resolve_write(a['path'])
             real.write_text(a['content'], encoding='utf-8')
             return ToolResult(f"✅ 已写入 {rel}（{real.stat().st_size} 字节）", artifacts=[rel])
+
+        self._add("write_file",
+                  "写入/新建文件。产出物统一落到 outputs/（自动按日期会话分类），写 notes/ 存知识库。禁止写系统/输入目录",
+                  {"type": "object", "properties": {
+                      "path": {"type": "string", "description": "目标路径，如 outputs/report.md 或 notes/想法.md 或裸文件名 report.md"},
+                      "content": {"type": "string"}},
+                   "required": ["path", "content"]}, write_file)
 
         def edit_file(a):
             real, rel = ws.resolve_write(a['path'])
@@ -395,6 +425,16 @@ class ToolRegistry:
             text = text.replace(old, new) if a.get('all') else text.replace(old, new, 1)
             real.write_text(text, encoding=enc)
             return ToolResult(f"✅ 已编辑 {rel}（替换 {n} 处）", artifacts=[rel])
+
+        self._add("edit_file",
+                  "精确编辑已存在文件（文本替换）。会保留其余内容；产出物登记到会话。"
+                  "old 必须与文件里的原文完全一致（含空格缩进）；找不到时会返回最相近的片段供修正",
+                  {"type": "object", "properties": {
+                      "path": {"type": "string"},
+                      "old": {"type": "string", "description": "被替换的原文片段（唯一）"},
+                      "new": {"type": "string"},
+                      "all": {"type": "boolean", "description": "true=替换全部出现处"}},
+                   "required": ["path", "old", "new"]}, edit_file)
 
         def list_dir(a):
             rel = a.get('path', '.')
@@ -422,6 +462,12 @@ class ToolRegistry:
             more = f"\n… 共 {len(items)} 项，仅显示前 200" if len(items) >= 200 else ""
             return ToolResult(f"目录 {p}:\n" + "\n".join(entries) + more)
 
+        self._add("list_dir",
+                  "列出目录内容（默认工作台根；可指定任意目录，只读）",
+                  {"type": "object", "properties": {
+                      "path": {"type": "string", "description": "目录路径，默认 ."}},
+                   "required": []}, list_dir)
+
         def glob_search(a):
             pat = a['pattern']
             base = a.get('path', '.')
@@ -442,6 +488,13 @@ class ToolRegistry:
             if not hits:
                 return ToolResult(f"未找到匹配 {pat} 的文件")
             return ToolResult(f"匹配 {pat} 的文件:\n" + "\n".join(hits[:100]))
+
+        self._add("glob_search",
+                  "按文件名正则搜索文件",
+                  {"type": "object", "properties": {
+                      "pattern": {"type": "string", "description": "文件名正则，如 .*\\.md$"},
+                      "path": {"type": "string", "description": "搜索起始目录，默认工作台"}},
+                   "required": ["pattern"]}, glob_search)
 
         def grep_search(a):
             pat = a['pattern']
@@ -470,8 +523,15 @@ class ToolRegistry:
                         continue
             return ToolResult("\n".join(out) if out else f"未找到匹配 {pat} 的内容")
 
+        self._add("grep_search",
+                  "在文本文件中按正则搜索内容",
+                  {"type": "object", "properties": {
+                      "pattern": {"type": "string"},
+                      "path": {"type": "string", "description": "搜索起始目录，默认工作台"}},
+                   "required": ["pattern"]}, grep_search)
+
         def delete_file(a):
-            real, rel = _managed_existing(a['path'])
+            real, rel = self._managed_existing(a['path'])
             ws._snap_record(real, rel)   # 删前快照：undo_turn 可还原文件、重建空目录
             if real.is_dir():
                 if any(real.iterdir()):
@@ -481,8 +541,13 @@ class ToolRegistry:
             real.unlink()
             return ToolResult(f"✅ 已删除文件 {rel}")
 
+        self._add("delete_file",
+                  "删除 outputs/ 或 notes/ 下的文件（目录必须为空）。不可恢复，谨慎使用",
+                  {"type": "object", "properties": {"path": {"type": "string"}},
+                   "required": ["path"]}, delete_file)
+
         def move_file(a):
-            src, src_rel = _managed_existing(a['path'])
+            src, src_rel = self._managed_existing(a['path'])
             dst, dst_rel = ws.resolve_managed(a['to'])
             if dst.exists():
                 raise ValueError(f"目标已存在，请换一个名字: {dst_rel}")
@@ -499,12 +564,29 @@ class ToolRegistry:
                 src.replace(dst)
             return ToolResult(f"✅ 已移动 {src_rel} → {dst_rel}", artifacts=[dst_rel])
 
+        self._add("move_file",
+                  "移动/重命名 outputs/ 或 notes/ 下的文件",
+                  {"type": "object", "properties": {
+                      "path": {"type": "string", "description": "源路径"},
+                      "to": {"type": "string", "description": "目标路径（同在白名单内）"}},
+                   "required": ["path", "to"]}, move_file)
+
         def mkdir(a):
             real, rel = ws.resolve_managed(a['path'])
             real.mkdir(parents=True, exist_ok=True)
             return ToolResult(f"✅ 已创建目录 {rel}")
 
+        self._add("mkdir",
+                  "在 outputs/ 或 notes/ 下新建目录",
+                  {"type": "object", "properties": {"path": {"type": "string"}},
+                   "required": ["path"]}, mkdir)
+
+    def _register_code_tools(self):
+        """代码执行（run_command / execute_python，需 allow_code_exec）。"""
+        ws = self.ws
+
         # ── 代码执行 ────────────────────────────────────────────
+
         def run_command(a):
             cmd = a['command']
             if hasattr(ws, 'note_untracked'):
@@ -623,16 +705,54 @@ class ToolRegistry:
                 out = f"❌ (进程异常退出，exit {proc.returncode})"
             return ToolResult(out or "(无输出)")
 
+        if self.allow_code_exec:
+            self._add("run_command",
+                      "执行系统命令（shell，cwd=工作台根目录）。危险命令（删除/格式化/改注册表等）需用户确认",
+                      {"type": "object", "properties": {
+                          "command": {"type": "string"},
+                          "timeout": {"type": "integer", "description": "超时秒数，默认 120，最大 900"}},
+                       "required": ["command"]}, run_command)
+
+            self._add("execute_python",
+                      "执行 Python 代码片段（输出即返回）。在独立子进程运行，cwd=工作台根目录，"
+                      "超时自动终止（默认 60s），死循环不会影响服务",
+                      {"type": "object", "properties": {
+                          "code": {"type": "string"},
+                          "timeout": {"type": "integer", "description": "超时秒数，默认 60，最大 300"}},
+                       "required": ["code"]}, execute_python)
+
+    def _register_memory_tools(self):
+        """长期记忆读写。"""
+        mem = self.memory
+
         # ── 记忆 ────────────────────────────────────────────────
+
         def memory_save(a):
             mem.save_fact(a['content'], source='user')
             return ToolResult(f"✅ 已记住：{a['content'][:100]}")
+
+        self._add("memory_save",
+                  "把用户明确告知的重要信息/偏好存入长期记忆（之后对话会自动 recall）",
+                  {"type": "object", "properties": {
+                      "content": {"type": "string", "description": "要记住的事实，一句话"}},
+                   "required": ["content"]}, memory_save)
 
         def memory_recall(a):
             rows = mem.recall(a.get('query', ''), limit=int(a.get('limit', 8)))
             if not rows:
                 return ToolResult("（记忆库中没有相关内容）")
             return ToolResult("相关记忆：\n" + "\n".join(f"- {r['content']}" for r in rows))
+
+        self._add("memory_recall",
+                  "查询长期记忆中与关键词相关的内容",
+                  {"type": "object", "properties": {
+                      "query": {"type": "string"},
+                      "limit": {"type": "integer", "description": "最多返回条数，默认 8"}},
+                   "required": ["query"]}, memory_recall)
+
+    def _register_office_tools(self):
+        """办公文档读写（可选依赖，未安装对应库时不注册）。"""
+        ws = self.ws
 
         # ── 办公文档（可选依赖）──────────────────────────────────
         try:
@@ -650,6 +770,7 @@ class ToolRegistry:
             HAS_PPTX = True
         except ImportError:
             HAS_PPTX = False
+
 
         def read_word(a):
             if not HAS_DOCX:
@@ -727,6 +848,26 @@ class ToolRegistry:
                         d.add_paragraph(line)
             d.save(str(real))
             return ToolResult(f"✅ 已生成 Word：{rel}", artifacts=[rel])
+
+        if HAS_DOCX:
+            self._add("read_word", "读取 Word 文档（正文段落 + 表格）",
+                      {"type": "object", "properties": {"path": {"type": "string"}},
+                       "required": ["path"]}, read_word)
+            self._add("write_word",
+                      "生成 Word 文档。推荐用 blocks 结构化输出（heading/para/bullet/number/table/code），"
+                      "排版比纯文本好得多；也兼容 content（每行一段，# 开头为标题）",
+                      {"type": "object", "properties": {
+                          "path": {"type": "string"},
+                          "title": {"type": "string", "description": "文档大标题（可选）"},
+                          "content": {"type": "string", "description": "纯文本正文（每行一段），与 blocks 二选一"},
+                          "blocks": {"type": "array", "description": "结构化内容块",
+                                     "items": {"type": "object", "properties": {
+                                         "type": {"type": "string",
+                                                  "description": "heading|para|bullet|number|table|code|quote"},
+                                         "level": {"type": "integer"},
+                                         "text": {"type": "string"},
+                                         "rows": {"type": "array", "description": "table 用：二维数组"}}}}},
+                       "required": ["path"]}, write_word)
 
         def read_excel(a):
             if not HAS_XLSX:
@@ -810,6 +951,22 @@ class ToolRegistry:
             wb.save(str(real))
             return ToolResult(f"✅ 已生成 Excel：{rel}（{len(rows)} 行）", artifacts=[rel])
 
+        if HAS_XLSX:
+            self._add("read_excel",
+                      "读取 Excel 表格（默认前 3 个工作表、每表 200 行，可用 sheet/offset/max_rows 分页）",
+                      {"type": "object", "properties": {
+                          "path": {"type": "string"},
+                          "sheet": {"type": "string", "description": "只读某个工作表"},
+                          "offset": {"type": "integer", "description": "跳过前 N 行"},
+                          "max_rows": {"type": "integer", "description": "本页最多行数，默认 200"}},
+                       "required": ["path"]}, read_excel)
+            self._add("write_excel", "生成 Excel 表格（二维数组 rows，自动加表头样式/冻结/列宽）",
+                      {"type": "object", "properties": {
+                          "path": {"type": "string"},
+                          "sheet": {"type": "string", "description": "工作表名，默认 Sheet1"},
+                          "rows": {"type": "array", "description": "二维数组，每行是值列表"}},
+                       "required": ["path", "rows"]}, write_excel)
+
         def read_ppt(a):
             if not HAS_PPTX:
                 return ToolResult("❌ 缺少 python-pptx 库，无法读 PPT")
@@ -865,6 +1022,22 @@ class ToolRegistry:
             pages = sum(1 for _ in prs.slides)
             return ToolResult(f"✅ 已生成 PPT：{rel}（{pages} 页）", artifacts=[rel])
 
+        if HAS_PPTX:
+            self._add("read_ppt", "提取 PPT 每页文本",
+                      {"type": "object", "properties": {"path": {"type": "string"}},
+                       "required": ["path"]}, read_ppt)
+            self._add("write_ppt",
+                      "生成 PPT（标题页 + 要点页）。slides 每项 {title, bullets:[...], notes}",
+                      {"type": "object", "properties": {
+                          "path": {"type": "string"},
+                          "title": {"type": "string", "description": "封面标题"},
+                          "subtitle": {"type": "string", "description": "封面副标题"},
+                          "slides": {"type": "array", "items": {"type": "object", "properties": {
+                              "title": {"type": "string"},
+                              "bullets": {"type": "array", "items": {"type": "string"}},
+                              "notes": {"type": "string", "description": "演讲者备注"}}}}},
+                       "required": ["path", "slides"]}, write_ppt)
+
         def read_image(a):
             """把图片交给多模态模型（需要模型支持图片输入）。"""
             p = ws.resolve_read(a['path'])
@@ -882,7 +1055,18 @@ class ToolRegistry:
             return ToolResult(f"✅ 已读取图片 {p.name}（{size} 字节），图像内容见随后的图片消息。",
                               image=str(p))
 
+        self._add("read_image",
+                  "读取图片内容（需要模型支持图片输入，在设置页开启）。"
+                  "用于看截图/表格图片/设计稿。未开启时返回提示",
+                  {"type": "object", "properties": {"path": {"type": "string"}},
+                   "required": ["path"]}, read_image)
+
+    def _register_collab_tools(self):
+        """Agent 协作工具（todo / ask_user / 计划 / 收尾 / 子任务委托）。"""
+        ws = self.ws
+
         # ── Agent 协作工具（todo / ask_user / 计划）───────────────
+
         def todo(a):
             items = a.get('items') or []
             norm = []
@@ -908,6 +1092,15 @@ class ToolRegistry:
             lines += [f"{mark[i['status']]} {i['text']}" for i in norm]
             return ToolResult("\n".join(lines))
 
+        self._add("todo",
+                  "维护任务清单（长任务必备）。每次传入完整清单，status: pending|doing|done。"
+                  "用户界面会实时显示进度",
+                  {"type": "object", "properties": {
+                      "items": {"type": "array", "items": {"type": "object", "properties": {
+                          "text": {"type": "string"},
+                          "status": {"type": "string", "description": "pending|doing|done"}}}}},
+                   "required": ["items"]}, todo)
+
         def ask_user(a):
             q = str(a.get('question') or '').strip()
             if not q:
@@ -920,6 +1113,15 @@ class ToolRegistry:
             if not ans:
                 return ToolResult("（用户未回答，请按最合理的方式继续，并在结论里说明你的假设）")
             return ToolResult(f"用户回答：{ans}")
+
+        self._add("ask_user",
+                  "向用户提问并等待回答（需求含糊、缺关键信息、需要在多个方案间选择时使用）。"
+                  "不要用它确认显而易见的事",
+                  {"type": "object", "properties": {
+                      "question": {"type": "string"},
+                      "options": {"type": "array", "items": {"type": "string"},
+                                  "description": "可选答案（最多 6 个），用户也可自由输入"}},
+                   "required": ["question"]}, ask_user)
 
         def plan(a):
             """兼容旧调用：把计划写成待办清单。"""
@@ -944,6 +1146,20 @@ class ToolRegistry:
             lines.append("（执行过程中请用 todo 工具更新每步状态）")
             return ToolResult("\n".join(lines))
 
+        self._add("plan",
+                  "制定任务计划（会转成待办清单展示给用户）。复杂任务开始时调用一次即可，"
+                  "执行过程中用 todo 更新状态",
+                  {"type": "object", "properties": {
+                      "goal": {"type": "string", "description": "任务目标"},
+                      "steps": {"type": "array", "description": "执行步骤列表",
+                                "items": {"type": "object",
+                                          "properties": {
+                                              "action": {"type": "string"},
+                                              "tool": {"type": "string", "description": "计划使用的工具名"},
+                                              "expected": {"type": "string", "description": "预期结果"}}}},
+                      "exit_condition": {"type": "string", "description": "什么时候算任务完成"}},
+                   "required": ["goal", "steps"]}, plan)
+
         def final_answer(a):
             """模型调用此工具表示任务已完成，输出最终答案。"""
             answer = a.get('answer', '')
@@ -961,6 +1177,15 @@ class ToolRegistry:
             if arts:
                 parts.append(f"\n产出物: {', '.join(arts)}")
             return ToolResult("\n".join(parts), artifacts=arts)
+
+        self._add("final_answer",
+                  "输出最终答案并结束任务（可选）。所有步骤完成或问题已回答时调用",
+                  {"type": "object", "properties": {
+                      "answer": {"type": "string", "description": "最终答案"},
+                      "summary": {"type": "string", "description": "任务摘要（可选）"},
+                      "artifacts": {"type": "array", "description": "产出物路径列表",
+                                    "items": {"type": "string"}}},
+                   "required": ["answer"]}, final_answer)
 
         def delegate_task(a):
             """将子任务委托给独立的子Agent执行，适用于需要独立上下文的任务。"""
@@ -1003,198 +1228,6 @@ class ToolRegistry:
             except Exception as e:
                 return ToolResult(f"❌ 子任务执行失败: {e}")
 
-        # ── 注册 ────────────────────────────────────────────────
-        self._add("read_file",
-                  "读取文本/代码文件内容（可读任意目录；敏感文件如 .env/.key 会被拦截）。"
-                  "大文件支持分段：offset=起始字符（默认 0）、limit=本段最大字符数（默认 8000），"
-                  "返回末尾会提示剩余长度和续读的 offset",
-                  {"type": "object", "properties": {
-                      "path": {"type": "string", "description": "文件路径（工作台内相对路径或任意绝对路径）"},
-                      "max_mb": {"type": "integer", "description": "最大读取 MB，默认 10"},
-                      "offset": {"type": "integer", "description": "从第几个字符开始读，默认 0（续读用）"},
-                      "limit": {"type": "integer", "description": "本段最大读取字符数，默认 8000"}},
-                   "required": ["path"]}, read_file)
-
-        self._add("write_file",
-                  "写入/新建文件。产出物统一落到 outputs/（自动按日期会话分类），写 notes/ 存知识库。禁止写系统/输入目录",
-                  {"type": "object", "properties": {
-                      "path": {"type": "string", "description": "目标路径，如 outputs/report.md 或 notes/想法.md 或裸文件名 report.md"},
-                      "content": {"type": "string"}},
-                   "required": ["path", "content"]}, write_file)
-
-        self._add("edit_file",
-                  "精确编辑已存在文件（文本替换）。会保留其余内容；产出物登记到会话。"
-                  "old 必须与文件里的原文完全一致（含空格缩进）；找不到时会返回最相近的片段供修正",
-                  {"type": "object", "properties": {
-                      "path": {"type": "string"},
-                      "old": {"type": "string", "description": "被替换的原文片段（唯一）"},
-                      "new": {"type": "string"},
-                      "all": {"type": "boolean", "description": "true=替换全部出现处"}},
-                   "required": ["path", "old", "new"]}, edit_file)
-
-        self._add("list_dir",
-                  "列出目录内容（默认工作台根；可指定任意目录，只读）",
-                  {"type": "object", "properties": {
-                      "path": {"type": "string", "description": "目录路径，默认 ."}},
-                   "required": []}, list_dir)
-
-        self._add("glob_search",
-                  "按文件名正则搜索文件",
-                  {"type": "object", "properties": {
-                      "pattern": {"type": "string", "description": "文件名正则，如 .*\\.md$"},
-                      "path": {"type": "string", "description": "搜索起始目录，默认工作台"}},
-                   "required": ["pattern"]}, glob_search)
-
-        self._add("grep_search",
-                  "在文本文件中按正则搜索内容",
-                  {"type": "object", "properties": {
-                      "pattern": {"type": "string"},
-                      "path": {"type": "string", "description": "搜索起始目录，默认工作台"}},
-                   "required": ["pattern"]}, grep_search)
-
-        self._add("delete_file",
-                  "删除 outputs/ 或 notes/ 下的文件（目录必须为空）。不可恢复，谨慎使用",
-                  {"type": "object", "properties": {"path": {"type": "string"}},
-                   "required": ["path"]}, delete_file)
-
-        self._add("move_file",
-                  "移动/重命名 outputs/ 或 notes/ 下的文件",
-                  {"type": "object", "properties": {
-                      "path": {"type": "string", "description": "源路径"},
-                      "to": {"type": "string", "description": "目标路径（同在白名单内）"}},
-                   "required": ["path", "to"]}, move_file)
-
-        self._add("mkdir",
-                  "在 outputs/ 或 notes/ 下新建目录",
-                  {"type": "object", "properties": {"path": {"type": "string"}},
-                   "required": ["path"]}, mkdir)
-
-        if self.allow_code_exec:
-            self._add("run_command",
-                      "执行系统命令（shell，cwd=工作台根目录）。危险命令（删除/格式化/改注册表等）需用户确认",
-                      {"type": "object", "properties": {
-                          "command": {"type": "string"},
-                          "timeout": {"type": "integer", "description": "超时秒数，默认 120，最大 900"}},
-                       "required": ["command"]}, run_command)
-
-            self._add("execute_python",
-                      "执行 Python 代码片段（输出即返回）。在独立子进程运行，cwd=工作台根目录，"
-                      "超时自动终止（默认 60s），死循环不会影响服务",
-                      {"type": "object", "properties": {
-                          "code": {"type": "string"},
-                          "timeout": {"type": "integer", "description": "超时秒数，默认 60，最大 300"}},
-                       "required": ["code"]}, execute_python)
-
-        self._add("memory_save",
-                  "把用户明确告知的重要信息/偏好存入长期记忆（之后对话会自动 recall）",
-                  {"type": "object", "properties": {
-                      "content": {"type": "string", "description": "要记住的事实，一句话"}},
-                   "required": ["content"]}, memory_save)
-
-        self._add("memory_recall",
-                  "查询长期记忆中与关键词相关的内容",
-                  {"type": "object", "properties": {
-                      "query": {"type": "string"},
-                      "limit": {"type": "integer", "description": "最多返回条数，默认 8"}},
-                   "required": ["query"]}, memory_recall)
-
-        if HAS_DOCX:
-            self._add("read_word", "读取 Word 文档（正文段落 + 表格）",
-                      {"type": "object", "properties": {"path": {"type": "string"}},
-                       "required": ["path"]}, read_word)
-            self._add("write_word",
-                      "生成 Word 文档。推荐用 blocks 结构化输出（heading/para/bullet/number/table/code），"
-                      "排版比纯文本好得多；也兼容 content（每行一段，# 开头为标题）",
-                      {"type": "object", "properties": {
-                          "path": {"type": "string"},
-                          "title": {"type": "string", "description": "文档大标题（可选）"},
-                          "content": {"type": "string", "description": "纯文本正文（每行一段），与 blocks 二选一"},
-                          "blocks": {"type": "array", "description": "结构化内容块",
-                                     "items": {"type": "object", "properties": {
-                                         "type": {"type": "string",
-                                                  "description": "heading|para|bullet|number|table|code|quote"},
-                                         "level": {"type": "integer"},
-                                         "text": {"type": "string"},
-                                         "rows": {"type": "array", "description": "table 用：二维数组"}}}}},
-                       "required": ["path"]}, write_word)
-        if HAS_XLSX:
-            self._add("read_excel",
-                      "读取 Excel 表格（默认前 3 个工作表、每表 200 行，可用 sheet/offset/max_rows 分页）",
-                      {"type": "object", "properties": {
-                          "path": {"type": "string"},
-                          "sheet": {"type": "string", "description": "只读某个工作表"},
-                          "offset": {"type": "integer", "description": "跳过前 N 行"},
-                          "max_rows": {"type": "integer", "description": "本页最多行数，默认 200"}},
-                       "required": ["path"]}, read_excel)
-            self._add("write_excel", "生成 Excel 表格（二维数组 rows，自动加表头样式/冻结/列宽）",
-                      {"type": "object", "properties": {
-                          "path": {"type": "string"},
-                          "sheet": {"type": "string", "description": "工作表名，默认 Sheet1"},
-                          "rows": {"type": "array", "description": "二维数组，每行是值列表"}},
-                       "required": ["path", "rows"]}, write_excel)
-        if HAS_PPTX:
-            self._add("read_ppt", "提取 PPT 每页文本",
-                      {"type": "object", "properties": {"path": {"type": "string"}},
-                       "required": ["path"]}, read_ppt)
-            self._add("write_ppt",
-                      "生成 PPT（标题页 + 要点页）。slides 每项 {title, bullets:[...], notes}",
-                      {"type": "object", "properties": {
-                          "path": {"type": "string"},
-                          "title": {"type": "string", "description": "封面标题"},
-                          "subtitle": {"type": "string", "description": "封面副标题"},
-                          "slides": {"type": "array", "items": {"type": "object", "properties": {
-                              "title": {"type": "string"},
-                              "bullets": {"type": "array", "items": {"type": "string"}},
-                              "notes": {"type": "string", "description": "演讲者备注"}}}}},
-                       "required": ["path", "slides"]}, write_ppt)
-
-        self._add("read_image",
-                  "读取图片内容（需要模型支持图片输入，在设置页开启）。"
-                  "用于看截图/表格图片/设计稿。未开启时返回提示",
-                  {"type": "object", "properties": {"path": {"type": "string"}},
-                   "required": ["path"]}, read_image)
-
-        self._add("todo",
-                  "维护任务清单（长任务必备）。每次传入完整清单，status: pending|doing|done。"
-                  "用户界面会实时显示进度",
-                  {"type": "object", "properties": {
-                      "items": {"type": "array", "items": {"type": "object", "properties": {
-                          "text": {"type": "string"},
-                          "status": {"type": "string", "description": "pending|doing|done"}}}}},
-                   "required": ["items"]}, todo)
-
-        self._add("ask_user",
-                  "向用户提问并等待回答（需求含糊、缺关键信息、需要在多个方案间选择时使用）。"
-                  "不要用它确认显而易见的事",
-                  {"type": "object", "properties": {
-                      "question": {"type": "string"},
-                      "options": {"type": "array", "items": {"type": "string"},
-                                  "description": "可选答案（最多 6 个），用户也可自由输入"}},
-                   "required": ["question"]}, ask_user)
-
-        self._add("plan",
-                  "制定任务计划（会转成待办清单展示给用户）。复杂任务开始时调用一次即可，"
-                  "执行过程中用 todo 更新状态",
-                  {"type": "object", "properties": {
-                      "goal": {"type": "string", "description": "任务目标"},
-                      "steps": {"type": "array", "description": "执行步骤列表",
-                                "items": {"type": "object",
-                                          "properties": {
-                                              "action": {"type": "string"},
-                                              "tool": {"type": "string", "description": "计划使用的工具名"},
-                                              "expected": {"type": "string", "description": "预期结果"}}}},
-                      "exit_condition": {"type": "string", "description": "什么时候算任务完成"}},
-                   "required": ["goal", "steps"]}, plan)
-
-        self._add("final_answer",
-                  "输出最终答案并结束任务（可选）。所有步骤完成或问题已回答时调用",
-                  {"type": "object", "properties": {
-                      "answer": {"type": "string", "description": "最终答案"},
-                      "summary": {"type": "string", "description": "任务摘要（可选）"},
-                      "artifacts": {"type": "array", "description": "产出物路径列表",
-                                    "items": {"type": "string"}}},
-                   "required": ["answer"]}, final_answer)
-
         if self.allow_delegate:
             self._add("delegate_task",
                       "将子任务委托给独立的子Agent执行。适用于需要独立上下文、避免污染主对话的任务。"
@@ -1204,9 +1237,6 @@ class ToolRegistry:
                           "context": {"type": "string", "description": "需要传递的上下文"},
                           "timeout": {"type": "integer", "description": "超时秒数", "default": 120}},
                        "required": ["task"]}, delegate_task)
-
-        # ── MCP 外部工具（B5）：注册进同一张表，默认逐条审批 ──
-        self._register_mcp()
 
     def _register_mcp(self):
         """把已连接 MCP server 的工具注册成 mcp__<server>__<tool>。
