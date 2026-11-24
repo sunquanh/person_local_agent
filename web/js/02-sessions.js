@@ -162,6 +162,7 @@ $('#btnNew').onclick = async () => {
 };
 async function selectSession(id, isNew) {
   state.cur = id;
+  if (typeof sbMq !== 'undefined' && sbMq.matches) setSidebar(false);  // 窄屏：选完会话收起抽屉
   const gen = ++state.sessionGen;  // 快速连点两个会话时，旧请求的回包不许覆盖新会话
   if (typeof persistUi === 'function') persistUi({ last_session: id });
   if (state.selectMode) exitSelectMode();

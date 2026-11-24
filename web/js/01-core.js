@@ -3,11 +3,11 @@
 
 if (location.protocol === 'file:') {
   document.documentElement.innerHTML = `<style>
-    body{margin:0;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif;background:#16181d;color:#e6e8eb}
-    #fh{max-width:520px;margin:12vh auto;padding:28px 32px;background:#1e2128;border:1px solid #333845;border-radius:12px}
+    body{margin:0;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif;background:#14161c;color:#e7e9ee}
+    #fh{max-width:520px;margin:12vh auto;padding:28px 32px;background:#1c1f27;border:1px solid #3a4150;border-radius:12px}
     h1{font-size:18px;margin:0 0 10px}
     code{background:#262a33;padding:2px 7px;border-radius:5px;font-size:13px}
-    .muted{color:#9aa0aa;font-size:12px;margin-top:14px}
+    .muted{color:#9aa3b2;font-size:12px;margin-top:14px}
   </style>
   <div id="fh">
     <h1>💼 加菲猫的工作室</h1>

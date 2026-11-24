@@ -21,25 +21,43 @@ async function exportHtml() {
   const html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(s.title || '会话导出')}</title><style>
-body{margin:0;background:#f7f9ff;color:#1b1e2e;font:14.5px/1.72 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+body{margin:0;background:#f3f4f6;color:#1c2333;font:14.5px/1.72 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
 .wrap{max-width:780px;margin:0 auto;padding:32px 20px 64px}
-h1{font-size:20px;margin:0 0 4px}.meta{color:#6b7290;font-size:12px;margin-bottom:22px}
-.msg{margin:16px 0;padding:13px 16px;border:1px solid #e3e8f5;border-radius:12px;background:#fff}
-.msg.u{background:#eef3ff}.role{font-size:11.5px;color:#6b7290;margin-bottom:6px}
-.md p{margin:8px 0}.md pre{background:#f6f8fd;border:1px solid #e3e8f5;border-radius:10px;padding:10px 12px;overflow:auto;font-size:12.5px}
-.md code{font-family:ui-monospace,Consolas,monospace;background:#f0f3fb;padding:1px 5px;border-radius:5px}
-.md table{border-collapse:collapse}.md td,.md th{border:1px solid #e3e8f5;padding:4px 8px;font-size:13px}
-.md img{max-width:100%}hr{border:none;border-top:1px dashed #e3e8f5;margin:20px 0}
+h1{font-size:20px;margin:0 0 4px}.meta{color:#5b6474;font-size:12px;margin-bottom:22px}
+.msg{margin:16px 0;padding:13px 16px;border:1px solid #e6e8ee;border-radius:12px;background:#fff}
+.msg.u{background:rgba(29,79,145,.10)}.role{font-size:11.5px;color:#5b6474;margin-bottom:6px}
+.md p{margin:8px 0}.md pre{background:#f6f8fd;border:1px solid #e6e8ee;border-radius:10px;padding:10px 12px;overflow:auto;font-size:12.5px}
+.md code{font-family:ui-monospace,Consolas,monospace;background:#f6f8fd;padding:1px 5px;border-radius:5px}
+.md table{border-collapse:collapse}.md td,.md th{border:1px solid #e6e8ee;padding:4px 8px;font-size:13px}
+.md img{max-width:100%}hr{border:none;border-top:1px dashed #e6e8ee;margin:20px 0}
 .pt{position:fixed;top:14px;right:14px;display:flex;gap:8px}
-.pt button{border:1px solid #d9dff5;background:#fff;color:#2b3350;border-radius:9px;
+.pt button{border:1px solid #d0d5dd;background:#fff;color:#1c2333;border-radius:9px;
   padding:7px 13px;font-size:13px;cursor:pointer}
-.pt button:hover{border-color:#4e7bff;color:#3d66e8}
-.pt .hint{font-size:12px;color:#6b7290;align-self:center}
+.pt button:hover{border-color:#1d4f91;color:#1d4f91}
+.pt .hint{font-size:12px;color:#5b6474;align-self:center}
+@media (prefers-color-scheme:dark){
+  body{background:#14161c;color:#e7e9ee}
+  .meta,.role,.pt .hint{color:#9aa3b2}
+  .msg{border-color:#2c313c;background:#1c1f27}
+  .msg.u{background:rgba(142,180,232,.16)}
+  .md pre{background:#12152a;border-color:#2c313c}
+  .md code{background:#12152a}
+  .md td,.md th{border-color:#2c313c}
+  hr{border-top-color:#2c313c}
+  .pt button{border-color:#3a4150;background:#1c1f27;color:#e7e9ee}
+  .pt button:hover{border-color:#8eb4e8;color:#d6e4f7}
+}
 @media print{
-  body{background:#fff}
+  body{background:#fff;color:#1c2333}
   .wrap{max-width:none;padding:0}
   .pt{display:none}
-  .msg{break-inside:avoid;page-break-inside:avoid;box-shadow:none}
+  .msg{break-inside:avoid;page-break-inside:avoid;box-shadow:none;background:#fff;border-color:#e6e8ee}
+  .msg.u{background:#fff}
+  .meta,.role{color:#5b6474}
+  .md pre{background:#f6f8fd;border-color:#e6e8ee}
+  .md code{background:#f6f8fd}
+  .md td,.md th{border-color:#e6e8ee}
+  hr{border-top-color:#e6e8ee}
   a{color:inherit;text-decoration:none}
 }
 </style></head><body>

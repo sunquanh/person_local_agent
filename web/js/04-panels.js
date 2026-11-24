@@ -214,6 +214,7 @@ document.addEventListener('keydown', (e) => {
     if (paletteOpen) return;                      // 命令面板自己处理
     if (!$('#ctxMenu').classList.contains('hidden')) { closeCtxMenu(); return; }
     if (!$('#modal').classList.contains('hidden')) { closeModal(); return; }
+    if (panelOpen() || sbOpen()) { setPanel(false); setSidebar(false); return; }
     if (state.busy) { e.preventDefault(); stopRun(); }
     return;
   }
@@ -221,7 +222,9 @@ document.addEventListener('keydown', (e) => {
   if (mod && e.key.toLowerCase() === 'l') {
     e.preventDefault(); $('#input').focus();
   } else if (mod && e.key.toLowerCase() === 'b') {
-    e.preventDefault(); document.body.classList.toggle('hide-left');
+    e.preventDefault();
+    if (sbMq.matches) setSidebar(!sbOpen());
+    else document.body.classList.toggle('hide-left');
   } else if (mod && e.key.toLowerCase() === 'j') {
     e.preventDefault();
     if (panelMq.matches) setPanel(!panelOpen());
@@ -369,10 +372,29 @@ $('#btnPanel').onclick = () => {
   else document.body.classList.toggle('hide-right');
   syncPanelBtn();
 };
-$('#panelMask').onclick = () => setPanel(false);
+$('#panelMask').onclick = () => { setPanel(false); setSidebar(false); };
 if (panelMq.addEventListener) panelMq.addEventListener('change', syncPanelBtn);
 else if (panelMq.addListener) panelMq.addListener(syncPanelBtn);
 syncPanelBtn();
+
+/* ── 会话栏抽屉：≤720px 滑出，不再横向滚动 ─────────────── */
+const sbMq = window.matchMedia('(max-width: 720px)');
+function sbOpen() { return document.body.classList.contains('sb-open'); }
+function setSidebar(open) {
+  document.body.classList.toggle('sb-open', !!open);
+  const b = $('#btnMenu');
+  if (b) {
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    b.title = open ? '收起会话栏' : '显示会话栏';
+  }
+  // 打开时焦点进抽屉里的 ×；关闭时若焦点还在抽屉里（×、会话行），还给汉堡键
+  if (open) { const c = $('#btnSbClose'); if (c) c.focus(); }
+  else if (document.activeElement && $('#sidebar').contains(document.activeElement) && b) b.focus();
+}
+$('#btnMenu').onclick = () => setSidebar(!sbOpen());
+$('#btnSbClose').onclick = () => setSidebar(false);
+if (sbMq.addEventListener) sbMq.addEventListener('change', () => { if (!sbMq.matches) setSidebar(false); });
+else if (sbMq.addListener) sbMq.addListener(() => { if (!sbMq.matches) setSidebar(false); });
 
 $('#btnBatch').onclick = () => openBatch();
 

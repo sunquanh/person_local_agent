@@ -1116,6 +1116,10 @@ body{min-width:720px}
 
 /* ── 检查器：窄窗口改为抽屉（滑出 + 遮罩），不再挤压对话列 ── */
 #btnPanel svg{width:14px;height:14px}
+#btnMenu{display:none}
+#btnMenu svg{width:15px;height:15px}
+#btnSbClose{display:none;margin-left:auto}
+#btnSbClose svg{width:14px;height:14px}
 #panelMask{display:none}
 @media (max-width:1200px){
   #rightPanel{position:fixed;right:0;top:0;bottom:0;width:min(360px,90vw);min-width:0;
@@ -1127,6 +1131,7 @@ body{min-width:720px}
   #rzRight{display:none}
   #btnPanel.on{color:var(--accent);background:var(--accent-tint)}
 }
+
 @media (max-width:980px){
   #sidebar{width:210px;min-width:180px}
   #inputBar{padding:10px 12px}
@@ -1134,6 +1139,23 @@ body{min-width:720px}
   .task-action{flex-basis:100%}
   .ch-actions{gap:6px}
   #chatHead{padding:10px 12px}
+}
+
+/* ── 会话栏：≤720px 改为抽屉（滑出 + 遮罩），不再横向滚动 ── */
+@media (max-width:720px){
+  body{min-width:0}
+  #sidebar{position:fixed;left:0;top:0;bottom:0;width:min(300px,86vw);min-width:0;
+    z-index:46;transform:translateX(-102%);transition:transform .2s ease;
+    box-shadow:var(--shadow-lg)}
+  body.hide-left #sidebar{display:flex}
+  body.sb-open #sidebar{transform:none}
+  body.sb-open #panelMask{display:block;position:fixed;inset:0;z-index:44;
+    background:rgba(15,18,32,.34)}
+  #rzLeft{display:none}
+  #btnMenu{display:inline-flex}
+  #btnSbClose{display:inline-flex}
+  /* 窄屏顶栏拥挤：“检查”只留图标，文字由 aria-label 承担 */
+  #btnPanel .btn-label{display:none}
 }
 
 /* 侧栏“正在运行”圆点 */
