@@ -20,7 +20,10 @@ if (location.protocol === 'file:') {
   (async () => {
     try {
       const r = await fetch('http://127.0.0.1:8080/api/health', { signal: AbortSignal.timeout(1500) });
-      if (r.ok) location.replace('http://127.0.0.1:8080/');
+      if (r.ok) {
+        await r.text().catch(() => {});  // 先读完 body 再跳转，否则跳转卸载文档会把请求 abort，DevTools 留 ERR_ABORTED
+        location.replace('http://127.0.0.1:8080/');
+      }
     } catch (e) { /* 未运行则保持提示页 */ }
   })();
   throw new Error('file:// 模式：请运行 python app.py 后通过 http://127.0.0.1:8080 访问');

@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import http.client
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -1346,6 +1347,7 @@ class Handler(BaseHTTPRequestHandler):
         '/api/workspace/tree': '_get_api_workspace_tree',
         '/api/memory': '_get_api_memory',
         '/api/health': '_get_api_health',
+        '/api/model/status': '_get_api_model_status',
         '/api/config': '_get_api_config',
         '/api/settings': '_get_api_settings',
         '/api/ui': '_get_api_ui',
@@ -1509,6 +1511,42 @@ class Handler(BaseHTTPRequestHandler):
             "rag_ok": rag_ok,
         })
         return self._json(base, extra_headers={'Access-Control-Allow-Origin': 'null'})
+
+    def _get_api_model_status(self, qs, path):
+        """首屏模型连通提示（09-boot.js 的 /api/model/status）：轻量探活。
+        只 GET {base_url}/models（OpenAI 兼容的列表接口），2 秒超时；
+        不发聊天请求、不带 api_key、不把 key 写进响应。base_url 取自
+        服务端自己的配置（聊天本来就要连它），不是请求体，不用再过
+        _check_probe_url 那套 SSRF 校验。"""
+        m = self.app.config.get('model', {}) or {}
+        base_url = (m.get('base_url') or '').rstrip('/')
+        name = m.get('name') or ''
+        if not base_url:
+            return self._json({'reachable': False, 'model': name, 'base_url': '',
+                               'error': '地址未配置'})
+        try:
+            u = urlparse(base_url)
+            if u.scheme not in ('http', 'https') or not u.hostname:
+                raise ValueError('base_url 无效')
+            conn_cls = (http.client.HTTPSConnection if u.scheme == 'https'
+                        else http.client.HTTPConnection)
+            conn = conn_cls(u.hostname, u.port or (443 if u.scheme == 'https' else 80),
+                            timeout=2)
+            try:
+                conn.request('GET', (u.path or '') + '/models')
+                r = conn.getresponse()
+                r.read(64 * 1024)  # 只要状态码，body 读个上限就够，不全量缓冲
+                ok = 200 <= r.status < 300
+                status = r.status
+            finally:
+                conn.close()
+        except Exception as e:
+            return self._json({'reachable': False, 'model': name, 'base_url': base_url,
+                               'error': '%s: %s' % (type(e).__name__, e)})
+        if not ok:
+            return self._json({'reachable': False, 'model': name, 'base_url': base_url,
+                               'error': 'HTTP %d' % status})
+        return self._json({'reachable': True, 'model': name, 'base_url': base_url})
 
     def _get_api_config(self, qs, path):
         return self._json(self.app._redacted_config())
