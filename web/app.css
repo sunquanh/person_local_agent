@@ -214,14 +214,14 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 #btnExport svg{width:13px;height:13px}
 
 /* ── 消息区 ── */
-#messages{flex:1;overflow-y:auto;padding:28px 24px 24px;display:flex;flex-direction:column;align-items:center;gap:28px}
+#messages{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;align-items:center;gap:20px}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes popIn{from{opacity:0;transform:translate(-50%,-50%) scale(.96)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
 .msg{position:relative;width:min(var(--col-w),100%);animation:fadeIn .18s ease backwards}
 .msg.selectable.user{padding-left:34px}
 @keyframes fadeUp{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 .msg.user{align-self:flex-end;margin-left:auto;max-width:min(72%,520px);
-  background:var(--panel);color:var(--text);
+  background:var(--panel2);color:var(--text);
   border:1px solid var(--border);
   padding:11px 16px 9px;border-radius:12px;
   box-shadow:none;width:auto;min-width:0}
@@ -454,20 +454,21 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 /* ── 欢迎页 ── */
 #welcome{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:6px;text-align:center;padding:20px;pointer-events:none}
-.w-logo{position:relative;width:68px;height:68px;border-radius:var(--r-xl);
+.w-logo{position:relative;width:40px;height:40px;border-radius:var(--r-md);flex:none;
   background:var(--accent-strong);color:#fff;
   display:flex;align-items:center;justify-content:center;
   font-size:25px;font-weight:700;letter-spacing:.04em;
-  box-shadow:0 0 0 10px var(--accent-tint),var(--shadow-md)}
-.w-logo svg{width:38px;height:38px}
-#welcome h2{margin:20px 0 2px;font-size:26px;font-weight:700;letter-spacing:.01em}
+  box-shadow:var(--shadow-sm)}
+.w-logo svg{width:22px;height:22px}
+#welcome h2{margin:0;font-size:26px;font-weight:700;letter-spacing:.01em}
+.w-head{display:flex;align-items:center;gap:14px}
 #welcome p{color:var(--muted);margin:0;font-size:14px}
 .w-stats{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;justify-content:center}
 .ws-item{background:var(--panel2);border:1px solid var(--border);border-radius:var(--r-xl);
   padding:5px 14px;font-size:12.5px;color:var(--muted);letter-spacing:.01em}
 .ws-item b{color:var(--text);font-weight:700}
 .ws-item:hover{border-color:var(--accent);color:var(--accent-h);background:var(--accent-tint);transition:all .15s}
-.w-chips{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:26px;pointer-events:auto}
+.w-chips{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:20px;pointer-events:auto}
 .w-chip{border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:var(--r-pill);
   padding:9px 17px;font-size:13.5px;cursor:pointer;transition:all .18s;box-shadow:var(--shadow-sm)}
 .w-chip:hover{border-color:var(--accent);color:var(--accent-h);background:var(--accent-tint)}
@@ -1158,7 +1159,7 @@ body{min-width:720px}
 /* ── 阅读栏：内容居中，检查器默认不占位，状态层在输入框上方 ── */
 #sidebar{background:#f7f8fa}
 [data-theme="dark"] #sidebar{background:#191c24}
-#messages{padding:28px 24px 24px}
+#messages{padding:20px 24px}
 .msg{width:min(var(--col-w),100%)}
 #welcome{width:min(var(--col-w),100%);margin:0 auto}
 #inputBar{background:var(--bg);border-top:0;padding:8px 24px 18px}
