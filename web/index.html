@@ -29,6 +29,7 @@
   }
   window.__wbReport = post;
   function show(msg, detail) {
+    if (document.getElementById('fh')) return;  // file:// 兜底页已接管，不再叠加报错横幅
     if (document.getElementById('bootFail')) return;
     var d = document.createElement('div');
     d.id = 'bootFail';
@@ -74,11 +75,11 @@
   }, 2500);
 })();
 </script>
-<link rel="stylesheet" href="/app.css">
-<link rel="stylesheet" href="/vendor/github.min.css" id="hlLight">
-<link rel="stylesheet" href="/vendor/github-dark.min.css" id="hlDark" disabled>
-<script src="/vendor/markdown-it.min.js"></script>
-<script src="/vendor/highlight.min.js"></script>
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="vendor/github.min.css" id="hlLight">
+<link rel="stylesheet" href="vendor/github-dark.min.css" id="hlDark" disabled>
+<script src="vendor/markdown-it.min.js"></script>
+<script src="vendor/highlight.min.js"></script>
 </head>
 <body>
 <div id="app">
@@ -272,15 +273,15 @@
   </div>
 </div>
 
-<script src="/js/ui-cache.js"></script>
-<script src="/js/01-core.js"></script>
-<script src="/js/02-sessions.js"></script>
-<script src="/js/03-render.js"></script>
-<script src="/js/04-panels.js"></script>
-<script src="/js/05-chat.js"></script>
-<script src="/js/06-input.js"></script>
-<script src="/js/07-memory.js"></script>
-<script src="/js/08-tools.js"></script>
-<script src="/js/09-boot.js"></script>
+<script src="js/ui-cache.js"></script>
+<script src="js/01-core.js"></script>
+<script src="js/02-sessions.js"></script>
+<script src="js/03-render.js"></script>
+<script src="js/04-panels.js"></script>
+<script src="js/05-chat.js"></script>
+<script src="js/06-input.js"></script>
+<script src="js/07-memory.js"></script>
+<script src="js/08-tools.js"></script>
+<script src="js/09-boot.js"></script>
 </body>
 </html>

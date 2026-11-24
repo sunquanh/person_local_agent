@@ -2,6 +2,7 @@
 'use strict';
 
 if (location.protocol === 'file:') {
+  const pageTitle = document.title;
   document.documentElement.innerHTML = `<style>
     body{margin:0;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif;background:#14161c;color:#e7e9ee}
     #fh{max-width:520px;margin:12vh auto;padding:28px 32px;background:#1c1f27;border:1px solid #3a4150;border-radius:12px}
@@ -15,6 +16,7 @@ if (location.protocol === 'file:') {
     <p>请在项目目录运行：<code>python app.py</code>，然后访问 <code>http://127.0.0.1:8080</code>。</p>
     <p class="muted">正在探测 127.0.0.1:8080 上是否已有服务在运行…</p>
   </div>`;
+  document.title = pageTitle;
   (async () => {
     try {
       const r = await fetch('http://127.0.0.1:8080/api/health', { signal: AbortSignal.timeout(1500) });

@@ -1099,11 +1099,14 @@ class Handler(BaseHTTPRequestHandler):
     def app(self) -> AgentServer:
         return self.server.agent_server
 
-    def _json(self, obj, code=200):
+    def _json(self, obj, code=200, extra_headers=None):
         body = json.dumps(obj, ensure_ascii=False).encode('utf-8')
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1482,8 +1485,14 @@ class Handler(BaseHTTPRequestHandler):
             "pages": len(self.app._pages),
         }
         # 免认证探活：只给"活着/忙不忙"，不泄露工作目录与模型地址
+        # CORS 只放 /api/health：file:// 兜底页的探活 fetch 来自 origin null，
+        # 没有这个头会被浏览器拦下，自动跳回 http://127.0.0.1:8080 永远走不通。
+        # 值用 'null' 而不用 '*'：默认配置无 access_token，走完整 health 分支，
+        # 响应里有工作目录绝对路径和模型配置，'*' 会让任意网站跨域读走；
+        # 探活只看 r.ok 不读 body，'null' 恰好只放行 file:// 页。
+        # 其他接口一律不加，避免任意网页跨域读会话/文件。
         if self.app.auth_required and not authed:
-            return self._json(base)
+            return self._json(base, extra_headers={'Access-Control-Allow-Origin': 'null'})
         from agent.tools import detect_optional_deps
         # health 只探活：不调 rag.stats()（它会全树遍历 inputs/notes
         # 算 pending，而 stats() 从不返回 'ok' 键，这行旧代码恒为
@@ -1499,7 +1508,7 @@ class Handler(BaseHTTPRequestHandler):
             "deps": detect_optional_deps(),
             "rag_ok": rag_ok,
         })
-        return self._json(base)
+        return self._json(base, extra_headers={'Access-Control-Allow-Origin': 'null'})
 
     def _get_api_config(self, qs, path):
         return self._json(self.app._redacted_config())
