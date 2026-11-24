@@ -202,13 +202,21 @@ class Rag:
                     self.db.execute('DELETE FROM chunks_fts WHERE relpath=?', (rel,))
                     self.db.execute('DELETE FROM docs WHERE relpath=?', (rel,))
                     removed += 1
-            self._rebuild_df()
+            if new_docs or updated or removed or not self._df_ready():
+                self._rebuild_df()
             self.db.commit()
         stats = {"docs": len(found), "new": len(new_docs), "updated": updated,
                  "removed": removed, "chunks": chunks_total,
                  "elapsed_s": round(time.time() - t0, 2)}
         log.info('RAG 索引完成: %s', stats)
         return stats
+
+    def _df_ready(self):
+        """df 表已有数据（无变化时跳过重建的兜底：老库迁移后 df 可能为空）。"""
+        try:
+            return self.db.execute('SELECT count(*) FROM df').fetchone()[0] > 0
+        except Exception:
+            return False
 
     def _rebuild_df(self):
         """重算文档频率表（建索引时一次性做，检索时直接读）。"""

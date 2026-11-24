@@ -562,7 +562,8 @@ class SessionManager:
     def session_ctx(self, s: Session) -> SessionCtx:
         return SessionCtx(s.id, s.title, datetime.now().strftime('%Y-%m-%d'))
 
-    def write_work_log(self, sid: str, user_input: str, tool_steps: list, response: str):
+    def write_work_log(self, sid: str, user_input: str, tool_steps: list, response: str,
+                       title: str = None):
         """追加本轮工作日志（会话目录 + notes/工作日志/<日期>.md）。"""
         try:
             now = datetime.now()
@@ -593,10 +594,11 @@ class SessionManager:
                     if not pd.exists():
                         pd.write_text(f"# 工作日志 {now.strftime('%Y-%m-%d')}\n",
                                       encoding='utf-8')
-                    try:
-                        title = self.load(sid).title
-                    except Exception:
-                        title = sid
+                    if title is None:
+                        try:
+                            title = self.load(sid).title
+                        except Exception:
+                            title = sid
                     daily = [f"\n### {ts} · {title}\n\n"] + body + ["\n---\n"]
                     with open(pd, 'a', encoding='utf-8') as f:
                         f.writelines(daily)

@@ -106,7 +106,7 @@ def check_env(cfg: dict) -> bool:
         u = _up(base_url)
         host = u.hostname or '127.0.0.1'
         port = u.port or (443 if u.scheme == 'https' else 80)
-        _sock.create_connection((host, port), timeout=3).close()
+        _sock.create_connection((host, port), timeout=1).close()
         print(f"  ✅ 模型服务可达: {base_url}")
     except Exception as e:
         print(f"  ⚠️ 模型服务当前不可达: {base_url or '(未配置)'}")

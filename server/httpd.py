@@ -1378,11 +1378,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self.app.auth_required and not authed:
                     return self._json(base)
                 from agent.tools import detect_optional_deps
+                # health 只探活：不调 rag.stats()（它会全树遍历 inputs/notes
+                # 算 pending，而 stats() 从不返回 'ok' 键，这行旧代码恒为
+                # True，纯浪费。RAG 统计只在设置页 /api/rag/stats 按需算）
                 rag_ok = True
-                try:
-                    rag_ok = bool(self.app.rag.stats().get('ok', True))
-                except Exception:
-                    rag_ok = False
                 m = self.app.config.get('model', {}) or {}
                 # 免认证接口：绝不能把 api_key（哪怕是 ENC 密文）带出去
                 safe_model = {k: v for k, v in m.items() if k != 'api_key'}
@@ -2599,14 +2598,22 @@ class Handler(BaseHTTPRequestHandler):
                 extra['citations'] = r['citations']
             app.sessions.add_message(sid, 'assistant', r['response'], extra=extra)
             app.sessions.register_artifacts(sid, r['artifacts'])
-            app.sessions.write_work_log(sid, message, r['tool_steps'], r['response'])
+            # 内存里补齐本轮两条消息（与落盘内容一致），后续写日志与记忆
+            # 提取直接复用 session，不再 load（此前一轮 load 三次）。
+            if not regenerate:
+                session.messages.append({'role': 'user', 'content': message,
+                                         'ts': time.time()})
+            session.messages.append({'role': 'assistant', 'content': r['response'],
+                                     'ts': time.time(),
+                                     'tool_steps': r.get('tool_steps') or []})
+            app.sessions.write_work_log(sid, message, r['tool_steps'], r['response'],
+                                        title=session.title)
             # 后台记忆提取（独立线程；LLMClient 已是线程安全，不会干扰前台）
             # 离线单卡/单槽模型下这次提取要再占一次推理，所以：
             #   ① 用户关了「自动提取记忆」就不跑；② 会话太短（<6 条）没东西可提；
             #   ③ 上一次提取还在跑就跳过（避免排队抢槽）；④ 批量作业期间不提取。
             try:
-                full = app.sessions.load(sid)
-                app.maybe_extract_memory(sid, full)
+                app.maybe_extract_memory(sid, session)
             except Exception:
                 pass
 
