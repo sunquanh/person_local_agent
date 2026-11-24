@@ -665,6 +665,7 @@ async function refreshSessionMeta() {
   if (state.cur !== sid) return;  // 期间已切会话，不写旧会话的标题
   if (d.session) {
     $('#chatTitle').textContent = d.session.title || '新会话';
+    if (typeof paintTitle === 'function') paintTitle();
     $('#chatMeta').textContent =
       `${d.session.messages.length} 条消息 · ${(d.session.artifacts || []).length} 个产出物`;
     if (!state.artShown) renderArtifacts(d.session.artifacts || []);

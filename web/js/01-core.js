@@ -197,6 +197,8 @@ function artIcon(ext) {
 function applyTheme() {
   const dark = localStorage.getItem(uiCacheKey(state.wsRoot, 'theme')) === 'dark';
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  const tc = document.querySelector('meta[name="theme-color"]');
+  if (tc) tc.setAttribute('content', dark ? '#14161c' : '#f3f4f6');
   const ld = $('#hlLight'), dd = $('#hlDark');
   if (ld) ld.disabled = dark;
   if (dd) dd.disabled = !dark;

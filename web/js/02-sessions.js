@@ -160,6 +160,11 @@ $('#btnNew').onclick = async () => {
   await loadSessions();
   await selectSession(d.session.id, true);
 };
+/* 浏览器标签标题跟随当前会话 */
+function paintTitle() {
+  const t = ($('#chatTitle') ? $('#chatTitle').textContent : '').trim();
+  document.title = t && t !== '新会话' ? t + ' - 加菲猫的工作室' : '加菲猫的工作室';
+}
 async function selectSession(id, isNew) {
   state.cur = id;
   if (typeof sbMq !== 'undefined' && sbMq.matches) setSidebar(false);  // 窄屏：选完会话收起抽屉
@@ -192,6 +197,7 @@ async function selectSession(id, isNew) {
   if (gen !== state.sessionGen) return;  // 旧回包不渲染
   const s = d.session || {};
   $('#chatTitle').textContent = s.title || '新会话';
+  paintTitle();
   $('#chatMeta').textContent =
     `${s.messages ? s.messages.length : 0} 条消息 · ${(s.artifacts || []).length} 个产出物`;
   state.compacted = s.compact || null;
@@ -268,6 +274,7 @@ async function renameSession(id, current) {
     body: JSON.stringify({ id, title: t }),
   });
   if (id === state.cur) $('#chatTitle').textContent = t;
+  paintTitle();
   await loadSessions();
 }
 function promptDialog(title, value) {
@@ -328,6 +335,7 @@ async function delSession(id) {
     state.cur = null;
     $('#messages').innerHTML = '';
     $('#chatTitle').textContent = '新会话';
+    paintTitle();
     $('#chatMeta').textContent = '';
     showWelcome(true);
   }
