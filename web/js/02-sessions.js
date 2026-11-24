@@ -72,6 +72,9 @@ function renderSessions() {
     }
     const el = document.createElement('div');
     el.className = 'sess' + (s.id === state.cur ? ' active' : '') + (s.pinned ? ' pinned' : '');
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    el.setAttribute('aria-label', s.title || '会话');
     // 最后活跃时间：按最近活跃排序 + 展示，替代创建时间
     // 元信息用图标 + 文字（图标由 .t-meta 统一尺寸/对齐，深浅色一致）
     const timeTag = lastEpoch(s)
@@ -94,11 +97,15 @@ function renderSessions() {
         ${preview}
       </span>
       <span class="ops">
-        <button class="x pin${s.pinned ? ' on' : ''}" data-act="pin" title="${s.pinned ? '取消置顶' : '置顶会话'}">${ico('pin')}</button>
-        <button class="x" data-act="ren" title="重命名">${ico('edit')}</button>
-        <button class="x" data-act="del" title="删除">${ico('x')}</button>
+        <button class="x pin${s.pinned ? ' on' : ''}" data-act="pin" title="${s.pinned ? '取消置顶' : '置顶会话'}" aria-label="${s.pinned ? '取消置顶' : '置顶会话'}">${ico('pin')}</button>
+        <button class="x" data-act="ren" title="重命名" aria-label="重命名">${ico('edit')}</button>
+        <button class="x" data-act="del" title="删除" aria-label="删除">${ico('x')}</button>
       </span>`;
     el.querySelector('.t').onclick = () => selectSession(s.id);
+    el.addEventListener('keydown', (e) => {
+      if (e.target !== el) return;  // 行内按钮自己处理按键，不触发选会话
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectSession(s.id); }
+    });
     el.querySelector('.x[data-act="pin"]').onclick = (e) => {
       e.stopPropagation();
       togglePin(s.id, !s.pinned);

@@ -135,7 +135,7 @@ function msgBot(text, toolSteps, artifacts, thinking, meta, opts) {
   const cleanText = st.content || text || '';
   if (thinkText) {
     html += `<details class="think-block"><summary>${ico('think')} 思考过程（${thinkText.length} 字）</summary>` +
-      `<button class="think-copy" title="复制思考内容">${ico('copy')}</button><pre>${esc(thinkText)}</pre></details>`;
+      `<button class="think-copy" title="复制思考内容" aria-label="复制思考内容">${ico('copy')}</button><pre>${esc(thinkText)}</pre></details>`;
   }
   html += `<div class="content md">${md.render(cleanText)}</div>`;
   // 工具时间线（历史数据直接渲染；实时帧到达时再追加）

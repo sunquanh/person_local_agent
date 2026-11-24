@@ -273,7 +273,7 @@ function ensureThinkBlock(botEl, thinkEl) {
     thinkEl.className = 'think-block';
     thinkEl.open = false;
     thinkEl.innerHTML = '<summary></summary><pre></pre>' +
-      `<button class="think-copy" title="复制思考内容">${ico('copy')}</button>`;
+      `<button class="think-copy" title="复制思考内容" aria-label="复制思考内容">${ico('copy')}</button>`;
     botEl.insertBefore(thinkEl, botEl.querySelector('.content'));
   }
   return thinkEl;

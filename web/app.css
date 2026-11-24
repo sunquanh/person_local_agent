@@ -154,6 +154,7 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .warn-mark svg.ic{width:12px;height:12px}
 .sess .ops{display:none;gap:2px;flex:none}
 .sess:hover .ops{display:flex}
+.sess:focus-within .ops{display:flex}
 .sess .x{border:none;background:none;color:var(--muted);font-size:12px;cursor:pointer;
   padding:3px 5px;border-radius:7px;transition:all .13s}
 .sess .x:hover{color:var(--accent);background:var(--panel3)}
@@ -265,6 +266,8 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
   opacity:0;transition:opacity .13s}
 .think-block{position:relative}
 .think-block:hover .think-copy{opacity:1}
+.think-block:focus-within .think-copy{opacity:1}
+.think-copy:focus-visible{opacity:1}
 .think-copy:hover{color:var(--accent);background:var(--accent-tint)}
 .cp-code{position:absolute;top:7px;right:9px;border:1px solid var(--border);background:var(--panel);
   color:var(--muted);font-size:var(--fs-xs);line-height:1;padding:4px 8px;border-radius:8px;cursor:pointer;
@@ -457,11 +460,10 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .w-logo{position:relative;width:40px;height:40px;border-radius:var(--r-md);flex:none;
   background:var(--accent-strong);color:#fff;
   display:flex;align-items:center;justify-content:center;
-  font-size:25px;font-weight:700;letter-spacing:.04em;
   box-shadow:var(--shadow-sm)}
 .w-logo svg{width:22px;height:22px}
 #welcome h2{margin:0;font-size:26px;font-weight:700;letter-spacing:.01em}
-.w-head{display:flex;align-items:center;gap:14px}
+.w-head{display:flex;align-items:center;justify-content:center;gap:14px}
 #welcome p{color:var(--muted);margin:0;font-size:14px}
 .w-stats{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;justify-content:center}
 .ws-item{background:var(--panel2);border:1px solid var(--border);border-radius:var(--r-xl);
@@ -648,6 +650,7 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
 .ws-row .act{color:var(--accent-h);font-size:12px;padding:2.5px 10px;border:1px solid var(--border);
   border-radius:var(--r-lg);opacity:0;transition:opacity .15s;flex:none;background:var(--panel)}
 .ws-row:hover .act{opacity:1}
+.ws-row:focus-within .act{opacity:1}
 .ws-row .act:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
 
 /* ── 搜索 ── */
@@ -670,6 +673,7 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
   border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);overflow:hidden;
   animation:popIn .14s ease}
 .pal-search{display:flex;align-items:center;gap:10px;padding:13px 17px;border-bottom:1px solid var(--border)}
+.pal-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-tint)}
 .pal-search .pal-ic{font-size:16px;color:var(--muted)}
 #palQ{flex:1;border:none;background:none;color:var(--text);font-size:14.5px;outline:none}
 #palQ::placeholder{color:var(--muted)}

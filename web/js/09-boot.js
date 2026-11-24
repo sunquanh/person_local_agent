@@ -216,6 +216,12 @@ if (wChipsEl) wChipsEl.addEventListener('click', (e) => {
 $('#chatTitle').onclick = () => {
   if (state.cur) renameSession(state.cur, $('#chatTitle').textContent);
 };
+$('#chatTitle').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    if (state.cur) renameSession(state.cur, $('#chatTitle').textContent);
+  }
+});
 
 /* ── 首屏收尾：右栏空态 / 抽屉按钮 / 模型连通提示 ───────────── */
 syncRightPanel();   // 没会话时也要把“这里是任务·工具·产物”的说明显出来，不留空白栏
