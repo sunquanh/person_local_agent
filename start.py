@@ -14,7 +14,6 @@
 它比直接跑 app.py 多做四件事：
 
   1. 没有 config.json 时从示例生成一份，并引导先填模型地址
-     （顺带把示例里写死的 D:\\我的工作台 换成盘符确实存在的路径）
   2. 端口被占用时先分辨是谁占的：
        本工作台 → 说明已经开着，直接帮你开浏览器，不再起第二个
        别的程序 → 自动往后找一个空闲端口，而不是报错退出
@@ -99,16 +98,8 @@ def read_config():
     return data
 
 
-def _drive_missing(path):
-    """D:\\xxx 这种路径，判断盘符在不在（离线机换机器最常见的就是这个坑）。"""
-    drive = os.path.splitdrive(path or '')[0]
-    if not drive or os.name != 'nt':
-        return False
-    return not os.path.isdir(drive + os.sep)
-
-
 def bootstrap_config():
-    """首次运行：从示例生成 config.json，并把不可用的盘符路径换成用户目录。"""
+    """首次运行：从示例生成 config.json。"""
     if not os.path.isfile(EXAMPLE_PATH):
         say('❌ 找不到 config.example.json，无法自动生成配置。')
         say('   请确认项目文件完整，或手动创建 config.json。')
@@ -119,20 +110,6 @@ def bootstrap_config():
     except Exception as e:
         say('❌ 生成 config.json 失败：%s' % e)
         return False
-
-    # 示例里工作台路径写的是 D:\我的工作台，换台机器可能根本没 D 盘
-    try:
-        with open(CFG_PATH, encoding='utf-8') as f:
-            cfg = json.load(f)
-        root = ((cfg.get('workspace') or {}).get('root') or '')
-        if _drive_missing(root):
-            fallback = os.path.join(os.path.expanduser('~'), '我的工作台')
-            cfg.setdefault('workspace', {})['root'] = fallback
-            with open(CFG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(cfg, f, ensure_ascii=False, indent=2)
-            say('   示例里的工作台路径 %s 所在盘符不存在，已改为：%s' % (root, fallback))
-    except Exception:
-        pass
 
     say()
     say('📝 首次运行：已根据 config.example.json 生成 config.json')

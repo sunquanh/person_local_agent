@@ -1547,7 +1547,7 @@ class Handler(BaseHTTPRequestHandler):
         title = ''
         if self.app._running_sid:
             try:
-                title = self.app.sessions.load(self.app._running_sid).title
+                title = self.app.sessions.title(self.app._running_sid)
             except Exception:
                 title = ''
         return self._json({"jobs": self.app._jobs, "queue": len(self.app._queue),

@@ -325,7 +325,7 @@ async function mcpFormSave() {
 }
 
 /* ── 批量作业（B8）：一个目录一次跑完，带台账 ──────────────── */
-const batchState = { timer: null, dir: 'inputs', expanded: new Set() };
+const batchState = { timer: null, dir: 'inputs', expanded: new Set(), details: {} };
 
 function ensureBatchPoll() {
   if (!batchState.timer) batchState.timer = setInterval(renderBatchList, 2000);
@@ -551,11 +551,24 @@ async function renderBatchList() {
   // 展开的作业才去拉逐项台账（列表接口只给摘要）
   await Promise.all(jobs.map(async (j) => {
     if (!batchState.expanded.has(j.id)) return j;
-  try {
-    const r = await fetch('/api/batch?id=' + encodeURIComponent(j.id));
+    // 详情没变就跳过重拉：counts 按 item status 现算（含 uncertain），
+    // 项完成必改 counts；在跑项的 response 为空，状态翻转也会改 counts，
+    // 所以 counts 相同且无在跑项时详情不可变，2 秒一轮不用再拉全量。
+    const cached = batchState.details[j.id];
+    const countsKey = JSON.stringify(j.counts || {});
+    if (cached && cached.countsKey === countsKey
+        && !(cached.job.items || []).some((it) => it.status === 'running')) {
+      Object.assign(j, cached.job);
+      return j;
+    }
+    try {
+      const r = await fetch('/api/batch?id=' + encodeURIComponent(j.id));
       const jd = await r.json();
-      if (jd.job) Object.assign(j, jd.job);
-    } catch (e) { /* 拉不到就先显示摘要 */ }
+      if (jd.job) {
+        Object.assign(j, jd.job);
+        batchState.details[j.id] = { countsKey, job: jd.job };
+      }
+    } catch (err) { /* 拉不到就先显示摘要 */ }
     return j;
   }));
   const list2 = $('#batchList');
@@ -569,7 +582,7 @@ async function renderBatchList() {
       b.onclick = async () => {
         const act = b.dataset.act;
         if (act === 'toggle') {
-          if (batchState.expanded.has(id)) batchState.expanded.delete(id);
+          if (batchState.expanded.has(id)) { batchState.expanded.delete(id); delete batchState.details[id]; }
           else batchState.expanded.add(id);
           renderBatchList();
           return;

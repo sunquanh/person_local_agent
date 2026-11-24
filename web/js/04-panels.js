@@ -523,53 +523,69 @@ let runSeen = false;
 // 空闲降频：连续多轮无运行任务时，每 6 轮（约 30 秒）才查一次 /api/jobs，
 // 有运行任务或刚跑完时立刻恢复 5 秒一轮。
 let runBannerSkip = 0;
-setInterval(async () => {
-  const b = $('#runBanner');
-  if (!b) return;
-  if (runBannerSkip > 0) { runBannerSkip--; return; }   // 空闲降频：本轮跳过
-  if (state.busy) { b.classList.add('hidden'); return; }   // 本地在跑时由 SSE 负责
+let runBannerChecking = false;  // 切回标签时两个监听会连发，防并发重查
+async function checkRunBanner() {
+  if (runBannerChecking) return;
+  runBannerChecking = true;
   try {
-    const r = await fetch('/api/jobs');
-    const d = await r.json();
-    const mine = !!d.running && d.running_sid && d.running_sid === state.cur;
-    b.classList.toggle('hidden', !mine);
-    // 侧栏“运行中”圆点：会话再多也能看出哪个在跑（对标多任务工作台）
-    const sids = new Set((d.runs || []).filter((r) => r.status === 'running')
-      .map((r) => r.sid));
-    const changed = sids.size !== state.runningSids.size
-      || [...sids].some((x) => !state.runningSids.has(x));
-    if (changed) {
-      state.runningSids = sids;
-      if (typeof renderSessions === 'function') renderSessions();
-    }
-    if (d.running && d.running_owner_is_me === false && !state.busy) {
-      // 局域网：别的浏览器正在跑任务，排队是正常的，直接说清楚
-      b.innerHTML = ico('clock') +
-        ` 会话「${esc(d.running_title || '其他会话')}」正在运行（由其他用户发起）；你发的消息会排队等待`;
-    } else {
-      b.innerHTML = ico('clock') + ' 上一轮仍在后台运行，完成后自动刷新本会话';
-    }
-    if (mine && state.task && state.task.status === 'stopping' && d.running) {
-      setTask('stopping', '停止请求已发出，任务仍在运行');
-    } else if (!d.running && state.task && state.task.status === 'stopping') {
-      setTask('uncertain', '已发出停止，但没有收到任务结束结果');
-    }
-    if (mine) {
-      runSeen = true;
-      if (!state.busy && state.task && (state.task.status === 'idle' || !state.task.status)) {
-        const sec = d.started_at ? Math.max(0, Math.round(Date.now() / 1000 - d.started_at)) : 0;
-        setTask('running', (d.running_title ? `后台仍在执行「${d.running_title}」` : '后台仍在执行')
-          + (sec ? '' : ''));
-        if (d.started_at) state.task.startedAt = d.started_at * 1000;
+    const b = $('#runBanner');
+    if (!b) return;
+    if (runBannerSkip > 0) { runBannerSkip--; return; }   // 空闲降频：本轮跳过
+    if (state.busy) { b.classList.add('hidden'); return; }   // 本地在跑时由 SSE 负责
+    try {
+      const r = await fetch('/api/jobs');
+      const d = await r.json();
+      const mine = !!d.running && d.running_sid && d.running_sid === state.cur;
+      b.classList.toggle('hidden', !mine);
+      // 侧栏“运行中”圆点：会话再多也能看出哪个在跑（对标多任务工作台）
+      const sids = new Set((d.runs || []).filter((r) => r.status === 'running')
+        .map((r) => r.sid));
+      const changed = sids.size !== state.runningSids.size
+        || [...sids].some((x) => !state.runningSids.has(x));
+      if (changed) {
+        state.runningSids = sids;
+        if (typeof renderSessions === 'function') renderSessions();
       }
-    } else if (runSeen) {
-      runSeen = false;
-      await loadSessionMessages();
-      toast('✅ 后台任务已完成，会话已刷新');
-    }
-    if (!d.running && !runSeen) runBannerSkip = 5;   // 空闲：下 5 轮跳过，约 30 秒后再查
-  } catch (e) { /* 断连时由 netBanner 负责提示 */ }
-}, 5000);
+      if (d.running && d.running_owner_is_me === false && !state.busy) {
+        // 局域网：别的浏览器正在跑任务，排队是正常的，直接说清楚
+        b.innerHTML = ico('clock') +
+          ` 会话「${esc(d.running_title || '其他会话')}」正在运行（由其他用户发起）；你发的消息会排队等待`;
+      } else {
+        b.innerHTML = ico('clock') + ' 上一轮仍在后台运行，完成后自动刷新本会话';
+      }
+      if (mine && state.task && state.task.status === 'stopping' && d.running) {
+        setTask('stopping', '停止请求已发出，任务仍在运行');
+      } else if (!d.running && state.task && state.task.status === 'stopping') {
+        setTask('uncertain', '已发出停止，但没有收到任务结束结果');
+      }
+      if (mine) {
+        runSeen = true;
+        if (!state.busy && state.task && (state.task.status === 'idle' || !state.task.status)) {
+          const sec = d.started_at ? Math.max(0, Math.round(Date.now() / 1000 - d.started_at)) : 0;
+          setTask('running', (d.running_title ? `后台仍在执行「${d.running_title}」` : '后台仍在执行')
+            + (sec ? '' : ''));
+          if (d.started_at) state.task.startedAt = d.started_at * 1000;
+        }
+      } else if (runSeen) {
+        runSeen = false;
+        await loadSessionMessages();
+        toast('✅ 后台任务已完成，会话已刷新');
+      }
+      if (!d.running && !runSeen) runBannerSkip = 5;   // 空闲：下 5 轮跳过，约 30 秒后再查
+    } catch (e) { /* 断连时由 netBanner 负责提示 */ }
+  } finally {
+    runBannerChecking = false;
+  }
+}
+
+setInterval(checkRunBanner, 5000);
+
+// 切回标签页时立即查一次：空闲降频最多 30 秒才发现别处起的新一轮，
+// visibilitychange/focus 时清零跳过计数并马上查，不增加轮询。
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { runBannerSkip = 0; checkRunBanner(); }
+});
+window.addEventListener('focus', () => { runBannerSkip = 0; checkRunBanner(); });
 
 document.addEventListener('click', (e) => {
   // 站内预览：产出物链接不再直接新开页/下载

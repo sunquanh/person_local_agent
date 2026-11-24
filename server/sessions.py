@@ -349,6 +349,16 @@ class SessionManager:
         s.messages = msgs
         return s
 
+    def title(self, sid: str) -> str:
+        """只取标题：/api/jobs 每 5 秒轮询一次，不必全量 load 会话消息。"""
+        sid = _check_sid(sid)
+        with self._db() as c:
+            row = c.execute('SELECT title FROM sessions WHERE id=?',
+                            (sid,)).fetchone()
+        if row is None:
+            raise FileNotFoundError(f'会话不存在: {sid}')
+        return row['title'] or ''
+
     def list_all(self) -> list:
         """会话列表：只读 sessions 表的增量统计，不再解析每条消息。"""
         out = []

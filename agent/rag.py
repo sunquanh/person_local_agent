@@ -40,6 +40,7 @@ _MAX_FILE = 2 * 1024 * 1024          # 单文件读取上限 2MB
 _CHUNK = 800                          # 分块大小（字符）
 _OVERLAP = 120                        # 相邻块重叠（保持上下文连贯）
 _MAX_CHUNKS = 4000                    # 索引块总数上限
+_STATS_TTL = 30.0                       # stats() 缓存秒数（pending 要全树遍历）
 
 _SUB_RE = re.compile(r'<[^>]+>')
 
@@ -130,6 +131,8 @@ class Rag:
         # check_same_thread=False：连接由 self._lock 串行化，允许跨线程使用
         self.db = sqlite3.connect(str(dbp), check_same_thread=False, timeout=10)
         self._lock = threading.RLock()
+        self._stats_cache = None
+        self._stats_at = 0.0
         with self._lock:
             self.db.execute('CREATE TABLE IF NOT EXISTS docs('
                             'relpath TEXT PRIMARY KEY, mtime REAL, size INT, '
@@ -175,8 +178,8 @@ class Rag:
                     continue
                 text = extract_text(self.root / rel)
                 chunks = chunk_text(text)
-                if not chunks:
-                    continue
+                # 0 块也不跳过：删旧块、docs 行以 chunk_count=0 写回（保留
+                # 新 mtime/size），否则旧块继续可被检索、pending() 永远报 1。
                 rem = len(chunks)
                 # 块数上限保护
                 if chunks_total + rem > _MAX_CHUNKS:
@@ -205,6 +208,7 @@ class Rag:
             if new_docs or updated or removed or not self._df_ready():
                 self._rebuild_df()
             self.db.commit()
+            self._stats_cache = None      # 索引变了，stats 缓存失效
         stats = {"docs": len(found), "new": len(new_docs), "updated": updated,
                  "removed": removed, "chunks": chunks_total,
                  "elapsed_s": round(time.time() - t0, 2)}
@@ -257,6 +261,11 @@ class Rag:
         return n
 
     def stats(self) -> dict:
+        # pending() 要全树遍历（500 文件约 30ms），_settings、/api/rag/stats、
+        # MCP 保存后轮询都会调：30 秒内返回缓存，refresh() 后失效。
+        now = time.time()
+        if self._stats_cache is not None and now - self._stats_at < _STATS_TTL:
+            return dict(self._stats_cache)
         with self._lock:
             docs = self.db.execute('SELECT count(*) FROM docs').fetchone()[0]
             chunks = self.db.execute('SELECT count(*) FROM chunks').fetchone()[0]
@@ -266,6 +275,8 @@ class Rag:
             out["pending"] = self.pending()
         except Exception:
             out["pending"] = 0
+        self._stats_cache = dict(out)
+        self._stats_at = time.time()
         return out
 
     def _fts_candidates(self, toks, limit: int = 80):
@@ -316,6 +327,7 @@ class Rag:
                 with self._lock:
                     self._rebuild_df()
                     self.db.commit()
+                    self._stats_cache = None  # df 表变了，tokens 计数失效
                     df = dict(self.db.execute('SELECT token, n FROM df'))
             # n = 全库块数（语料规模），idf 才不会随候选数变小而失真
             scored = []
@@ -328,7 +340,10 @@ class Rag:
                     if tok not in df:
                         continue
                     tf = toks.count(tok) / len(toks)
-                    idf = max(0.0, math.log((n + 1) / (df.get(tok, 0) + 1)))
+                    # BM25 式 idf：词出现在全部块里时旧式 log((n+1)/(df+1)) 为 0，
+                    # 小语料（1-2 个文档）检索全灭；此处恒大于 0。
+                    idf = max(0.0, math.log(
+                        1 + (n - df.get(tok, 0) + 0.5) / (df.get(tok, 0) + 0.5)))
                     score += tf * idf
                 if score > 0:
                     scored.append((score, rel, text))
