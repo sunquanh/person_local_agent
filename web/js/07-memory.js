@@ -209,7 +209,7 @@ async function dirPicker(box, st, opts) {
       ${opts.actions || ''}
     </div>
     <div class="dp-list">${dirs.length
-      ? dirs.map((n) => `<div class="ws-row ws-dir" data-name="${esc(n.name)}">
+      ? dirs.map((n) => `<div class="ws-row ws-dir" data-name="${esc(n.name)}" tabindex="0" role="button" aria-label="进入目录 ${esc(n.name)}">
           <span class="ic">${ico('folder')}</span><span class="nm">${esc(n.name)}</span></div>`).join('')
       : '<div class="muted dp-empty">（没有子目录）</div>'}</div>`;
   const rootSel = box.querySelector('.dp-root');
@@ -223,10 +223,22 @@ async function dirPicker(box, st, opts) {
     dirPicker(box, st, opts);
   };
   box.querySelectorAll('.ws-dir').forEach((el) => {
-    el.onclick = () => {
+    const go = () => {
       st.path = (st.path ? st.path + '/' : '') + el.dataset.name;
-      dirPicker(box, st, opts);
+      return dirPicker(box, st, opts);
     };
+    el.onclick = go;
+    el.addEventListener('keydown', (e) => {
+      if (e.target !== el) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        // 导航后列表重渲染，旧行被销毁，焦点回到新列表首行（无子目录则回“上级”）
+        go().then(() => {
+          const next = box.querySelector('.ws-dir') || box.querySelector('[data-dp="up"]');
+          if (next) next.focus();
+        });
+      }
+    });
   });
   if (opts.onLoad) opts.onLoad(d);
   return d;
