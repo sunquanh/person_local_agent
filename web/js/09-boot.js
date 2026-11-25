@@ -211,8 +211,7 @@ fetch('/api/health').then((r) => r.json()).then((d) => {
   state.isLoopback = d.is_loopback !== false;
   paintScope(d);
   $('#sbStatus').innerHTML =
-    `<div class="st-name">${esc((d.model || {}).name || '未配置模型')}</div>` +
-    `<div class="st-ws" title="${esc(d.workspace || '')}">${esc(d.workspace || '')}</div>`;
+    `<div class="st-name">${esc((d.model || {}).name || '未配置模型')}</div>`;
 }).catch(() => {});
 fetch('/api/settings').then((r) => r.json()).then((d) => {
   state.profile = ((d || {}).security || {}).profile || state.profile || '';

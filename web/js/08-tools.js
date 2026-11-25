@@ -347,7 +347,9 @@ async function openBatch(prefill) {
   $('#bjLoad').onclick = () => batchLoadDir(false);
   $('#bjStart').onclick = batchCreate;
   const pickBtn = $('#bjPick');
-  if (pickBtn) pickBtn.onclick = () => openBatchPicker();
+  if (pickBtn) pickBtn.onclick = () => {
+    openBatchPicker().catch((e) => toast('打开目录选择器失败：' + (e && e.message ? e.message : String(e)), true));
+  };
   if (Array.isArray(prefill) && prefill.length) {
     // 从文件浏览多选进来：直接把这些文件列出来（已勾选）
     const dirs = prefill.map((f) => f.split('/').slice(0, -1).join('/'));

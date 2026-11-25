@@ -185,8 +185,6 @@ svg.ic{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;fle
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .st-name::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none;
   box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
-.st-ws{font-size:var(--fs-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);
-  padding-left:var(--sp-14)}
 .sb-btns{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-2)}
 .sb-btns .btn{justify-content:flex-start;gap:var(--sp-6);padding:var(--sp-8) var(--sp-10);font-size:var(--fs-sm);border-radius:var(--r-sm)}
 .sb-btns .btn svg{width:13.5px;height:13.5px;opacity:.8}

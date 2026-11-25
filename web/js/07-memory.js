@@ -189,6 +189,7 @@ const bjDir = { root: 'ws', path: '' };                 // 批量作业当前目
 
 async function dirPicker(box, st, opts) {
   opts = opts || {};
+  const fail = (e) => toast('进入目录失败：' + (e && e.message ? e.message : String(e)), true);
   box.innerHTML = '<div class="muted dp-loading">加载中…</div>';
   let d;
   try { d = await fetchTree(st.root, st.path); }
@@ -215,28 +216,31 @@ async function dirPicker(box, st, opts) {
   const rootSel = box.querySelector('.dp-root');
   if (rootSel) rootSel.onchange = (e) => {
     st.root = e.target.value; st.path = '';
-    dirPicker(box, st, opts);
+    dirPicker(box, st, opts).catch(fail);
   };
   box.querySelector('[data-dp="up"]').onclick = () => {
     const i = st.path.lastIndexOf('/');
     st.path = i <= 0 ? '' : st.path.slice(0, i);
-    dirPicker(box, st, opts);
+    dirPicker(box, st, opts).catch(fail);
   };
   box.querySelectorAll('.ws-dir').forEach((el) => {
     const go = () => {
       st.path = (st.path ? st.path + '/' : '') + el.dataset.name;
       return dirPicker(box, st, opts);
     };
-    el.onclick = go;
+    el.onclick = () => { go().catch(fail); };
     el.addEventListener('keydown', (e) => {
       if (e.target !== el) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        // 导航后列表重渲染，旧行被销毁，焦点回到新列表首行（无子目录则回“上级”）
+        // 导航后列表重渲染，旧行被销毁，焦点回到新列表首行（无子目录则落文件行，再无则回“上级”）
         go().then(() => {
-          const next = box.querySelector('.ws-dir') || box.querySelector('[data-dp="up"]');
+          const mb = box.closest('#modalBody');
+          const next = box.querySelector('.ws-dir')
+            || (mb && mb.querySelector('#treeBox .ws-row'))
+            || box.querySelector('[data-dp="up"]');
           if (next) next.focus();
-        });
+        }).catch(fail);
       }
     });
   });
@@ -267,7 +271,7 @@ function openTree(rel) {
       state.treeRootPath = wsDir.rootPath;
       renderWsFiles(d);
     },
-  });
+  }).catch((e) => toast('进入目录失败：' + (e && e.message ? e.message : String(e)), true));
 }
 // 产出物卡片「📂 目录」：打开文件浏览并定位到文件所在目录（仅工作台内有效）
 function openTreeAt(dir) {
