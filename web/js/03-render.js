@@ -191,9 +191,10 @@ function refreshCompactBtn() {
   const b = $('#btnCompact');
   if (!b) return;
   const has = !!state.cur;
-  b.classList.toggle('hidden', !has);
-  if (!has) return;
   const c = state.compacted;
+  const usable = !!c || (Number(state.msgCount) || 0) >= 4;
+  b.classList.toggle('hidden', !has || !usable);
+  if (!has || !usable) return;
   b.classList.toggle('on', !!c);
   b.textContent = c ? '↩ 撤销压缩' : '压缩历史';
   b.disabled = !c && (Number(state.msgCount) || 0) < 4;

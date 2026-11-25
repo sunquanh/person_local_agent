@@ -333,6 +333,7 @@ async function delSession(id) {
   });
   if (state.cur === id) {
     state.cur = null;
+    refreshCompactBtn();
     $('#messages').innerHTML = '';
     $('#chatTitle').textContent = '新会话';
     paintTitle();
