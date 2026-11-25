@@ -75,22 +75,23 @@ _LOGIN_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>工作台 · 需要访问令牌</title>
 <style>
+/* 圆角与主站 app.css 的 token 对齐（--r-xs:8px、--r-sm:10px、--r-md:12px）；独立文档无 :root 可引用，token 值改了同步这里 */
 *{box-sizing:border-box}
 body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
 background:#0f1115;color:#e6e8ee;font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
-.card{width:min(92vw,420px);background:#171a21;border:1px solid #262b36;border-radius:14px;
+.card{width:min(92vw,420px);background:#171a21;border:1px solid #262b36;border-radius:12px;
 padding:28px 26px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
 h1{margin:0 0 6px;font-size:19px;font-weight:600}
 p{margin:0 0 18px;color:#8b93a7;font-size:13px}
-input{width:100%;padding:11px 13px;border-radius:9px;border:1px solid #2e3542;
+input{width:100%;padding:11px 13px;border-radius:10px;border:1px solid #2e3542;
 background:#0f1218;color:#e6e8ee;font-size:14px;outline:none}
 input:focus{border-color:#4c7dff}
-button{margin-top:12px;width:100%;padding:11px;border:0;border-radius:9px;cursor:pointer;
+button{margin-top:12px;width:100%;padding:11px;border:0;border-radius:10px;cursor:pointer;
 background:#4c7dff;color:#fff;font-size:14px;font-weight:600}
 button:hover{background:#3f6ee8}
 .tip{margin-top:16px;padding-top:14px;border-top:1px solid #242a35;color:#6f7789;font-size:12px;
 line-height:1.7;word-break:break-all}
-code{color:#9aa6c2;background:#0f1218;padding:1px 5px;border-radius:4px}
+code{color:#9aa6c2;background:#0f1218;padding:1px 5px;border-radius:8px}
 </style></head><body>
 <div class="card">
   <h1>需要访问令牌</h1>

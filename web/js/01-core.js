@@ -4,10 +4,11 @@
 if (location.protocol === 'file:') {
   const pageTitle = document.title;
   document.documentElement.innerHTML = `<style>
+    /* 圆角与主站 app.css 的 token 对齐（--r-xs:8px、--r-sm:10px、--r-md:12px）；独立文档无 :root 可引用，token 值改了同步这里 */
     body{margin:0;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif;background:#14161c;color:#e7e9ee}
     #fh{max-width:520px;margin:12vh auto;padding:28px 32px;background:#1c1f27;border:1px solid #3a4150;border-radius:12px}
     h1{font-size:18px;margin:0 0 10px}
-    code{background:#262a33;padding:2px 7px;border-radius:5px;font-size:13px}
+    code{background:#262a33;padding:2px 7px;border-radius:8px;font-size:13px}
     .muted{color:#9aa3b2;font-size:12px;margin-top:14px}
   </style>
   <div id="fh">
