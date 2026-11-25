@@ -6,7 +6,8 @@
 - summaries: 会话摘要（每条会话一条，跨会话可追溯）
 
 注入: 每次对话把相关记忆（recall(query) 按关键词评分）+ 用户偏好 + 近期会话摘要
-拼进 system prompt，让模型"记得"之前的事。
+拼进 system prompt，让模型"记得"之前的事。问记忆本身且召回为空时，回退到
+最新重要事实（见 _asks_about_memory），避免模型误称“没有记忆”。
 """
 import os
 import re
@@ -44,6 +45,21 @@ def _split_words(text: str):
             for i in range(len(run) - 1):
                 words.append(run[i:i + 2])
     return words
+
+
+# 问记忆本身的泛问（如“你有什么记忆”“你还记得我吗”）：事实文本里很少出现
+# “记忆/记得”这类词，关键词召回几乎命中不了，召回为空时直接回“没有记忆”
+# 是误导。触发这类问法且召回为空时，build_context 回退到最新重要事实。
+# 记得/记住类分支要求 12 字内出现疑问标记（吗/呢/什么/多少/哪些/？），
+# 否则“你记得帮我发一下报表”“请记住我的邮箱是…”这类指令也会误触发。
+_MEMORY_QUESTION_RE = re.compile(
+    r'记忆|知道多少|关于我的信息|记不记得|知不知道|记得的|记住的|'
+    r'(你.{0,2}记得|你.{0,2}记住|记得我|记住我|了解我|对我了解|知道我)'
+    r'[^。！\n]{0,12}(吗|呢|什么|多少|哪些|？|\?)')
+
+
+def _asks_about_memory(text: str) -> bool:
+    return bool(text) and _MEMORY_QUESTION_RE.search(text) is not None
 
 
 class Memory:
@@ -360,11 +376,23 @@ class Memory:
         """拼装注入 system 的记忆上下文（相关事实 + 偏好 + 近期摘要）。"""
         parts = []
         facts = self.recall(user_input, limit=limit_facts)
+        fallback = False
+        if not facts and _asks_about_memory(user_input):
+            # 泛问记忆：关键词召回命中不了事实文本，回退到最新重要事实，
+            # 否则模型只能说“没有记忆”。all_facts 已按重要、最新排序。
+            facts = self.all_facts(limit=limit_facts)
+            fallback = True
+            if facts:  # 与 recall 一致：被注入的事实 access_count+1
+                with _LOCK, self._conn() as c:
+                    c.executemany(
+                        "UPDATE facts SET access_count=access_count+1 WHERE id=?",
+                        [(f['id'],) for f in facts])
         if facts:
             lines = "\n".join(
                 ("- ⭐ " if f.get('important') else "- ") + f['content']
                 for f in facts)
-            parts.append(f"【长期记忆·相关事实】\n{lines}")
+            label = "【长期记忆·最近的重要事实】" if fallback else "【长期记忆·相关事实】"
+            parts.append(f"{label}\n{lines}")
         prefs = self.get_prefs()
         if prefs:
             plines = "\n".join(f"- {k}: {v}" for k, v in prefs.items())
