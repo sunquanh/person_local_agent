@@ -1528,10 +1528,20 @@ class Handler(BaseHTTPRequestHandler):
             u = urlparse(base_url)
             if u.scheme not in ('http', 'https') or not u.hostname:
                 raise ValueError('base_url 无效')
+            try:
+                port = u.port
+            except ValueError:
+                # 端口越界/非数字：urlparse 访问 .port 时直接抛
+                return self._json({'reachable': False, 'model': name,
+                                   'base_url': base_url, 'error': 'base_url 端口无效'})
+            if port is not None and not 1 <= port <= 65535:
+                # :0 不能静默回落到 80/443，那是另一个服务
+                return self._json({'reachable': False, 'model': name,
+                                   'base_url': base_url, 'error': 'base_url 端口无效'})
+            port = port or (443 if u.scheme == 'https' else 80)
             conn_cls = (http.client.HTTPSConnection if u.scheme == 'https'
                         else http.client.HTTPConnection)
-            conn = conn_cls(u.hostname, u.port or (443 if u.scheme == 'https' else 80),
-                            timeout=2)
+            conn = conn_cls(u.hostname, port, timeout=2)
             try:
                 conn.request('GET', (u.path or '') + '/models')
                 r = conn.getresponse()
