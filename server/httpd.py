@@ -13,6 +13,7 @@ import mimetypes
 import os
 import re
 import secrets
+import select
 import socket
 import hmac
 import subprocess
@@ -365,10 +366,11 @@ class AgentServer:
         srv = config.get('server', {}) or {}
         self.auto_exit = bool(srv.get('auto_exit', True))
         try:
-            self.auto_exit_grace_s = max(1.0, float(srv.get('auto_exit_grace_s', 5)))
+            self.auto_exit_grace_s = max(1.0, float(srv.get('auto_exit_grace_s', 10)))
         except (TypeError, ValueError):
-            self.auto_exit_grace_s = 5.0
+            self.auto_exit_grace_s = 10.0
         self._pages = {}            # page_id -> 最后一次心跳时间
+        self._presence = {}         # page_id -> presence 长连接数（>0 说明标签页还开着）
         self._pages_seen = False    # 出现过页面才启用，纯 API/CLI 用法不受影响
         self._pages_empty_at = 0.0
         self._exit_lock = threading.Lock()
@@ -506,6 +508,29 @@ class AgentServer:
             self._pages.pop(pid, None)
             log.info('页面注销 %s（剩余 %d 个）', pid, len(self._pages))
         return len(self._pages)
+
+    def page_presence_open(self, pid: str) -> None:
+        # presence 长连接接通：标签页活着的直接证明，当成一次心跳。
+        if not pid:
+            return
+        self._presence[pid] = self._presence.get(pid, 0) + 1
+        self._pages[pid] = time.time()
+        self._pages_seen = True
+        self._pages_empty_at = 0.0
+
+    def page_presence_close(self, pid: str) -> None:
+        # presence 长连接断开：浏览器/标签页已关。直接从登记表里拿掉——
+        # 还活着的页面 5 秒内会发心跳（page_touch）或重连 presence，
+        # 10 秒宽限期兜底，不会误杀。
+        if not pid:
+            return
+        n = self._presence.get(pid, 0) - 1
+        if n <= 0:
+            self._presence.pop(pid, None)
+            self._pages.pop(pid, None)
+            log.info('页面 presence 断开 %s（剩余 %d 个）', pid, len(self._pages))
+        else:
+            self._presence[pid] = n
 
     def start_exit_watchdog(self) -> None:
         if not self.auto_exit:
@@ -1348,6 +1373,7 @@ class Handler(BaseHTTPRequestHandler):
         '/api/workspace/tree': '_get_api_workspace_tree',
         '/api/memory': '_get_api_memory',
         '/api/health': '_get_api_health',
+        '/api/page/presence': '_get_api_page_presence',
         '/api/model/status': '_get_api_model_status',
         '/api/config': '_get_api_config',
         '/api/settings': '_get_api_settings',
@@ -2046,6 +2072,47 @@ class Handler(BaseHTTPRequestHandler):
         pid = (qs.get('id') or [''])[0][:64]
         self.app.page_touch(pid)
         return self._json({"ok": True})
+
+    def _get_api_page_presence(self, qs, path):
+        """presence 长连接（SSE）：标签页活着的直接证明。
+
+        前端每个标签页登记后持一条；浏览器/标签页一关，连接就断，
+        服务端几秒内注销该页，不用等 sendBeacon，也不靠 2 小时心跳超时。
+        最小化的标签页连接不断，不会被误判。断开重连时当成心跳。
+        """
+        pid = (qs.get('id') or [''])[0][:64]
+        if not pid:
+            return self._err(400, '缺少 id')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'keep-alive')
+        self.send_header('X-Accel-Buffering', 'no')
+        self.end_headers()
+        app = self.app
+        app.page_presence_open(pid)
+        try:
+            while True:
+                # 对端关闭时连接变可读且 recv 为空：立刻发现，不用等下一次写失败。
+                try:
+                    r, _, _ = select.select([self.connection], [], [], 5.0)
+                except (OSError, ValueError):
+                    break
+                if r:
+                    try:
+                        # 消费掉（对端正常不会发数据；只剩 FIN 时 recv 为空）
+                        if not self.connection.recv(1):
+                            break
+                    except OSError:
+                        break
+                try:
+                    self.wfile.write(b': ping\n\n')
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError, ValueError):
+                    break
+        finally:
+            app.page_presence_close(pid)
+        return None
 
     def _post_api_stop(self, qs):
         ag = self.app._running
@@ -3395,8 +3462,9 @@ def _acquire_instance_lock(ws_root, host: str, port: int):
     锁文件在 <工作台>/.agent/server.lock，O_EXCL 独占创建，内容是
     {pid, host, port}。返回锁路径；拿不到且确认已有活实例时抛 RuntimeError；
     锁文件本身写不下时警告并返回 None（降级运行，不因锁机制拦启动）。
-    stale 锁（崩溃、os._exit 残留）靠探活 + pid 双重判定后接管：
-    探活命中或 pid 活着都拒绝启动并明说删锁办法，绝不静默双开。
+    stale 锁（崩溃、os._exit 残留）靠探活 + pid + 锁文件心跳 mtime 三重判定后接管：
+    探活命中、或 pid 活着且锁心跳新鲜时拒绝启动并明说删锁办法，绝不静默双开；
+    锁 60 秒没续期则接管（持有进程已死/僵死，或 PID 被别的进程重用）。
     """
     lock_path = Path(ws_root) / '.agent' / 'server.lock'
     try:
@@ -3438,6 +3506,14 @@ def _acquire_instance_lock(ws_root, host: str, port: int):
                 f'已有工作台实例在运行（{old_host}:{old_port}），不用再起一个。')
         if old_pid and not _pid_alive(old_pid):
             break  # 进程已死：stale 锁，接管
+        try:
+            _age = time.time() - lock_path.stat().st_mtime
+        except OSError:
+            _age = 0.0
+        if _age > 60:
+            # 锁文件 60 秒没人续期：持有进程已死/僵死，或 PID 被别的进程重用；
+            # 端口探活已确认没人在服务，接管。
+            break
         # pid 活着但探活失败：对方可能正在启动（锁已建、端口未绑），
         # 再等几轮；6 轮后仍探不到才拒绝（宁可拒绝双开，不冒险接管）。
         last_old_pid = old_pid
@@ -3463,6 +3539,30 @@ def _acquire_instance_lock(ws_root, host: str, port: int):
     except OSError as e:
         log.warning('实例锁接管失败，跳过实例锁: %s', e)
         return None
+
+
+def _lock_heartbeat_loop(lock_path):
+    """实例锁心跳：每 10 秒续一下锁文件 mtime。
+
+    续之前先读锁内容核对 pid（与 _release_instance_lock 同口径）：锁已被
+    新实例接管/删掉就停掉，不续别人的锁。文件读不到（已删/被接管）也停。
+    下次启动靠 mtime 超期判断 stale，不用只信 pid——pid 可能被重用。
+    """
+    while True:
+        time.sleep(10.0)
+        old = None
+        for _ in range(3):  # 瞬时读失败（如文件被短暂锁定）重试，别一次就停
+            try:
+                old = json.loads(Path(lock_path).read_text(encoding='utf-8'))
+                break
+            except Exception:
+                time.sleep(0.1)
+        if old is None or int(old.get('pid') or 0) != os.getpid():
+            return
+        try:
+            os.utime(lock_path)
+        except OSError:
+            pass
 
 
 def _release_instance_lock(lock_path):
@@ -3520,6 +3620,11 @@ def serve(config: dict, host: str = None, port: int = None, config_path: str = N
         except Exception:
             pass
         raise
+    if getattr(app, '_instance_lock_path', None):
+        # 锁心跳线程（daemon，随进程走；正常退出删锁，utime 报错自跳过）
+        threading.Thread(target=_lock_heartbeat_loop,
+                         args=(app._instance_lock_path,),
+                         name='instance-lock-heartbeat', daemon=True).start()
     server.agent_server = app
     app._httpd = server
     app.start_exit_watchdog()

@@ -29,7 +29,7 @@ def _defaults():
             "host": "127.0.0.1",
             "port": 8080,
             "auto_exit": True,
-            "auto_exit_grace_s": 5,
+            "auto_exit_grace_s": 10,
         },
         "limits": {
             "max_upload_mb": 50,

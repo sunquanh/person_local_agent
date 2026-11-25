@@ -86,6 +86,20 @@ const WB_PAGE_ID = 'p' + Math.random().toString(36).slice(2, 10) + Date.now().to
 let wbPageTimer = null;
 let wbPageClosed = false;
 
+// presence 长连接：服务端靠这条连接判断标签页是不是还开着。
+// 关浏览器时连接立刻断开，服务端几秒内就知道，不用等 sendBeacon；
+// 最小化的标签页连接不断，不会被误判。重连是自动的，服务端把一次
+// 新的 presence 连接当成心跳。
+let wbPresence = null;
+
+function wbPresenceOpen() {
+  if (wbPresence) { try { wbPresence.close(); } catch (e) {} wbPresence = null; }
+  try {
+    wbPresence = new EventSource('/api/page/presence?id=' + encodeURIComponent(WB_PAGE_ID));
+    wbPresence.onerror = () => {};
+  } catch (e) { wbPresence = null; }
+}
+
 function wbPageRegister() {
   wbPageClosed = false;
   fetch('/api/page/open', {
@@ -107,6 +121,7 @@ function wbPageRegister() {
           method: 'POST',
         }).catch(() => {});
       }, 5000);
+      wbPresenceOpen();
     })
     .catch(() => {
       // 登记失败（服务端刚重启/网络抖动）：5 秒后重试，否则心跳永不启动，
@@ -118,6 +133,7 @@ function wbPageRegister() {
 function wbPageUnregister() {
   if (wbPageClosed) return;
   wbPageClosed = true;
+  if (wbPresence) { try { wbPresence.close(); } catch (e) {} wbPresence = null; }
   if (wbPageTimer) { clearInterval(wbPageTimer); wbPageTimer = null; }
   const url = '/api/page/close?id=' + encodeURIComponent(WB_PAGE_ID);
   try {

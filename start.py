@@ -8,7 +8,7 @@
     python start.py 8081          换个端口启动
     python start.py lan           开局域网（同事用本机 IP 访问）
     python start.py 8081 lan      换端口 + 局域网
-    python start.py keep          关掉网页后不退出（默认 5 秒后自动退出）
+    python start.py keep          关掉网页后不退出（默认 10 秒后自动退出）
     python start.py --no-browser  不自动打开浏览器
 
 它比直接跑 app.py 多做四件事：
@@ -54,7 +54,7 @@ HELP = """
   python start.py keep          关掉网页后不退出（默认会自动退出）
   python start.py --no-browser  不自动打开浏览器
 
-  默认行为：关掉所有网页标签后等 5 秒自动停止服务，cmd 窗口一起关闭。
+  默认行为：关掉所有网页标签后等 10 秒自动停止服务，cmd 窗口一起关闭。
   Ctrl+C 也可以立即停止；直接关掉这个窗口同样能停。
 """
 
@@ -448,9 +448,9 @@ def main():
     auto_exit = bool(srv.get('auto_exit', True)) and not keep
     if auto_exit:
         try:
-            grace = int(float(srv.get('auto_exit_grace_s', 5)))
+            grace = int(float(srv.get('auto_exit_grace_s', 10)))
         except (TypeError, ValueError):
-            grace = 5
+            grace = 10
         say('   关掉所有网页标签后，%d 秒内没有新连接就自动停止服务' % grace)
     else:
         say('   关闭网页后服务继续运行（想自动退出就去掉 keep 参数）')

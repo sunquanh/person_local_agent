@@ -194,7 +194,7 @@ def main():
                     help='工作目录。相对路径相对程序目录。会话和配置都在这里')
     ap.add_argument('--no-browser', action='store_true')
     ap.add_argument('--keep-alive', action='store_true',
-                    help='关闭所有网页后不退出服务（默认会在 5 秒后退出）')
+                    help='关闭所有网页后不退出服务（默认会在 10 秒后退出）')
     args = ap.parse_args()
 
     from server.storepath import StorePathError, prepare_launch
