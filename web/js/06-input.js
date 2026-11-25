@@ -8,7 +8,7 @@ function showAskCard(botEl, f) {
   card.innerHTML = `<div class="ask-q">${ico('ask')} ${esc(f.question || '')}</div>` +
     (opts.length ? `<div class="ask-opts">${opts.map((o) =>
       `<button class="btn small ask-opt">${esc(o)}</button>`).join('')}</div>` : '') +
-    `<div class="ask-custom"><input type="text" placeholder="或直接输入你的回答…">` +
+    `<div class="ask-custom"><input type="text" aria-label="或直接输入你的回答" placeholder="或直接输入你的回答…">` +
     `<button class="btn small primary ask-send">回答</button>` +
     `<button class="btn small ghost ask-skip">跳过</button>` +
     `<span class="ask-tip muted"></span></div>`;
@@ -97,7 +97,7 @@ async function openPreview(rel, name) {
   }
   const verBar = vers.length ? `<div class="pv-vers">
       <span class="pv-vlab">历史版本</span>
-      <select id="pvVer"><option value="">当前（最新）</option>` +
+      <select id="pvVer" aria-label="历史版本"><option value="">当前（最新）</option>` +
       vers.map((v) => `<option value="${esc(v.ts)}">${esc(fmtVerTs(v.ts))} · ${fmtSize(v.size)}</option>`).join('') +
       `</select>
       <button class="btn small" id="pvDiff" disabled>与当前对比</button>
@@ -235,7 +235,7 @@ function sideDiffHtml(f) {
     if (r.t === '≋') {
       const id = sideFolds.length;
       sideFolds.push({ l: r.l || [], r: r.r || [] });
-      return `<tr class="s-fold" data-fold="${id}" title="点击展开这几行">` +
+      return `<tr class="s-fold" data-fold="${id}" title="点击或按 Enter 展开这几行">` +
         `<td colspan="2">⋯ 折叠了 ${r.n || (r.l || []).length} 行未改动内容，点击展开</td></tr>`;
     }
     return sideRowHtml(r.t, r.l, r.r);
@@ -251,6 +251,11 @@ function sideDiffHtml(f) {
 // 折叠行展开：就地插回原行，展开后变灰不可再点（避免重复插入）
 function wireSideFolds(root) {
   (root || document).querySelectorAll('tr.s-fold').forEach((tr) => {
+    tr.tabIndex = 0;
+    tr.setAttribute('role', 'button');
+    tr.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); }
+    });
     tr.onclick = () => {
       if (tr.dataset.done) return;
       const fd = sideFolds[+tr.dataset.fold];
@@ -261,6 +266,8 @@ function wireSideFolds(root) {
       tr.insertAdjacentHTML('afterend', html);
       tr.dataset.done = '1';
       tr.classList.add('s-fold-done');
+      tr.tabIndex = -1;
+      tr.removeAttribute('role');
       tr.lastElementChild.textContent = `⋯ 已展开 ${n} 行（点上面行可继续对比）`;
     };
   });
@@ -459,6 +466,10 @@ function autoGrow(el) {
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 160) + 'px';
 }
+
+// 首次按占位文字折行后的高度算一次，否则窄屏下占位第二行被裁
+autoGrow(inp);
+window.addEventListener('resize', () => autoGrow(inp));
 inp.addEventListener('keydown', (e) => {
   if (isComposingKey(e)) return;   // 输入法上屏中：不发送、不触发 ↑ 编辑等快捷键
   const menuOpen = !$('#slashMenu').classList.contains('hidden');

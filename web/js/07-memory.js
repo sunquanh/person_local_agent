@@ -14,7 +14,7 @@ $('#btnMemory').onclick = async () => {
     state_mem.prefs = d.prefs || {};
     renderMemory();
   } catch (e) {
-    $('#modalBody').innerHTML = '<div class="muted" style="padding:18px;text-align:center">加载失败：' + esc(e.message) + '</div>';
+    $('#modalBody').innerHTML = '<div class="muted" style="padding:var(--sp-18);text-align:center">加载失败：' + esc(e.message) + '</div>';
   }
 };
 
@@ -145,7 +145,7 @@ function renderMemory() {
       const id = +item.dataset.id;
       const old = item.querySelector('.ct').textContent;
       item.innerHTML = `<div class="mem-edit">
-        <textarea rows="2">${esc(old)}</textarea>
+        <textarea rows="2" aria-label="编辑记忆内容">${esc(old)}</textarea>
         <div class="btns"><button class="btn" id="edCancel">取消</button>
         <button class="btn primary" id="edSave">保存</button></div></div>`;
       item.querySelector('#edCancel').onclick = () => renderMemory();
@@ -723,8 +723,8 @@ $('#btnSettings').onclick = async () => {
   function tplRender() {
     const box = $('#stTplList');
     box.innerHTML = tpls.length ? tpls.map((t, i) =>
-      `<div class="tpl-item"><input class="tpl-name" value="${esc(t.name)}" placeholder="模板名（如 周报）">
-        <textarea class="tpl-ct" rows="2" placeholder="模板内容（输入框打 /模板名 填入）">${esc(t.content)}</textarea>
+      `<div class="tpl-item"><input class="tpl-name" aria-label="模板名" value="${esc(t.name)}" placeholder="模板名（如 周报）">
+        <textarea class="tpl-ct" aria-label="模板内容" rows="2" placeholder="模板内容（输入框打 /模板名 填入）">${esc(t.content)}</textarea>
         <button class="btn small ghost tpl-del" data-i="${i}">删除</button></div>`
     ).join('') : '<div class="muted">（暂无模板，点「＋ 添加模板」）</div>';
     box.querySelectorAll('.tpl-del').forEach((b) => {

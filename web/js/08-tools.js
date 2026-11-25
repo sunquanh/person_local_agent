@@ -4,7 +4,7 @@
 function openSearchModal(prefill) {
   $('#modalTitle').textContent = '搜索会话';
   $('#modalBody').innerHTML = `
-    <input type="text" id="srchQ" placeholder="输入关键词搜索全部会话内容…">
+    <input type="text" id="srchQ" aria-label="输入关键词搜索全部会话内容" placeholder="输入关键词搜索全部会话内容…">
     <div id="srchRes" class="srch-res"></div>`;
   openModal();
   const q = $('#srchQ');
@@ -21,12 +21,15 @@ function openSearchModal(prefill) {
       const d = await r.json();
       const res = d.results || [];
       $('#srchRes').innerHTML = res.length ? res.map((x, i) =>
-        `<div class="srch-item" data-i="${i}">
+        `<div class="srch-item" data-i="${i}" tabindex="0" role="button">
           <div class="srch-title">${x.role === 'user' ? '🧑' : '🤖'} ${esc(x.title)} <span class="muted">${esc(x.role || '')}</span></div>
           <div class="srch-snip">${esc(x.snippet)}</div>
         </div>`).join('') : '<div class="muted">（无结果）</div>';
       $('#srchRes').querySelectorAll('.srch-item').forEach((el) => {
         el.onclick = () => { closeModal(); selectSession(res[+el.dataset.i].sid); };
+        el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+        });
       });
     }, 250);
   };

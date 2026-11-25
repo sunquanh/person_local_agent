@@ -52,7 +52,7 @@ function renderSessions() {
     const empty = document.createElement('div');
     empty.className = 'sb-empty';
     if (kw) {
-      empty.innerHTML = '没有匹配的会话<br><a class="sb-content-link">在全部会话内容中搜索 →</a>';
+      empty.innerHTML = '没有匹配的会话<br><button type="button" class="sb-content-link">在全部会话内容中搜索 →</button>';
       empty.querySelector('.sb-content-link').onclick = () => openSearchModal(sbFilter);
     } else {
       empty.innerHTML = '暂无会话<br>点上方「＋ 新会话」开始';
@@ -190,7 +190,7 @@ async function selectSession(id, isNew) {
   } catch (e) {
     if (gen !== state.sessionGen) return;  // 已被更新的请求取代，静默丢弃
     // 加载失败也要清掉骨架屏，否则“点了没反应”的占位图一直挂着
-    $('#messages').innerHTML = '<div class="muted" style="padding:16px">会话加载失败：' + esc(e.message) + '，点左侧会话重试。</div>';
+    $('#messages').innerHTML = '<div class="muted" style="padding:var(--sp-16)">会话加载失败：' + esc(e.message) + '，点左侧会话重试。</div>';
     toast('会话加载失败：' + e.message, true);
     return;
   }
