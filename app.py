@@ -168,6 +168,8 @@ def validate_config(cfg: dict) -> dict:
                                                  'server.auto_exit_grace_s')
         if srv['auto_exit_grace_s'] < 0:
             raise ValueError('配置 server.auto_exit_grace_s 不能为负')
+    if 'hide_console' in srv and not isinstance(srv['hide_console'], bool):
+        raise ValueError('配置 server.hide_console 必须是布尔值')
     lim = cfg.get('limits') or {}
     for k in ('max_upload_mb', 'chat_timeout_s', 'compress_threshold_chars'):
         if k in lim:
@@ -182,6 +184,31 @@ def validate_config(cfg: dict) -> dict:
         if rag['top_k'] <= 0:
             raise ValueError('配置 rag.top_k 必须大于 0')
     return cfg
+
+
+def _hide_console_window(windll=None) -> bool:
+    """Windows 下隐藏控制台窗口（启动成功后调用，best-effort）。
+
+    用 ShowWindow(SW_HIDE) 而不是 FreeConsole：控制台还在，
+    print/报错照常写，只是窗口看不见。没控制台（无窗 exe 等）
+    或任何失败都返回 False，不抛错。windll 参数供测试注入假对象。
+    """
+    if windll is None:
+        if os.name != 'nt':
+            return False
+        try:
+            import ctypes
+            windll = ctypes.windll
+        except Exception:
+            return False
+    try:
+        hwnd = windll.kernel32.GetConsoleWindow()
+        if not hwnd:
+            return False
+        windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        return True
+    except Exception:
+        return False
 
 
 def main():
@@ -252,9 +279,13 @@ def main():
     print('\n   按 Ctrl+C 停止\n')
     if not args.no_browser:
         try:
-            webbrowser.open(url)
+            opened = webbrowser.open(url)
         except Exception:
-            pass
+            opened = False
+        srv = cfg.get('server') or {}
+        if opened and srv.get('auto_exit', True) and srv.get('hide_console', True):
+            print('   窗口将隐藏；关掉所有网页后服务自动退出')
+            _hide_console_window()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

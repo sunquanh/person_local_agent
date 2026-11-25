@@ -30,6 +30,7 @@ def _defaults():
             "port": 8080,
             "auto_exit": True,
             "auto_exit_grace_s": 10,
+            "hide_console": True,
         },
         "limits": {
             "max_upload_mb": 50,
